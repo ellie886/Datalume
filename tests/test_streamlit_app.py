@@ -1,0 +1,163 @@
+from pathlib import Path
+
+from streamlit.testing.v1 import AppTest
+
+from agent_models import AgentResponse, AgentStep, VisualizationSpec
+from analysis_engine import run_analysis
+from database_manager import create_database
+from data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
+from deepseek_client import IntentPlan
+from router import QuestionType
+
+
+APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
+
+
+def test_streamlit_initial_view_runs():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    assert not app.exception
+    assert len(app.chat_input) == 0
+    assert len(app.session_state["databases"]) == 0
+    assert any("从数据开始" in item.value for item in app.markdown)
+    assert not any(button.label == "生成 AI 经营诊断报告" for button in app.button)
+    assert not any("校园团购" in button.label for button in app.button)
+    assert not app.expander
+
+
+def test_streamlit_create_database_from_csv():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    next(button for button in app.button if button.label == "新建数据库").click()
+    app.run()
+    next(item for item in app.text_input if item.label == "数据库名称").input("校园团购")
+    uploader = app.get("file_uploader")[0]
+    content = (APP_PATH.parent / "data" / "orders.csv").read_bytes()
+    if hasattr(uploader, "upload"):
+        uploader.upload("orders.csv", content, "text/csv")
+        app.run()
+        next(button for button in app.button if button.label == "创建数据库").click()
+    else:
+        # Streamlit 1.40 AppTest 尚不能驱动 file_uploader；直接注入同一 CSV
+        # 后继续验证数据库创建后的完整 Streamlit 状态与导航。
+        create_database(app.session_state, "校园团购", content)
+    app.run()
+    assert not app.exception
+    assert len(app.session_state["databases"]) == 1
+    assert any(button.label == "校园团购" for button in app.sidebar.button)
+    assert not any(button.label == "校园团购" for button in app.main.button)
+    assert len(app.chat_input) == 1
+
+
+def test_streamlit_chat_chart_and_report_download():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    create_database(app.session_state, "校园团购", (APP_PATH.parent / "data" / "orders.csv").read_bytes())
+    app.run()
+    assert any(button.label == "校园团购" for button in app.button)
+    assert len(app.chat_input) == 1
+    next(button for button in app.button if button.label == "哪个商品销量最高？").click()
+    app.run()
+    assert not app.exception
+    assert not app.get("arrow_vega_lite_chart")
+    assert any("基础分析模式" in item.value for item in app.markdown)
+    assert not any("AI 诊断" in item.value for item in app.markdown)
+    assert not any("建议优先关注" in item.value for item in app.markdown)
+
+    app.chat_input[0].set_value("哪个商品销量最高？帮我画出来。").run()
+    assert not app.exception
+    assert app.get("arrow_vega_lite_chart")
+    next(button for button in app.button if button.label == "生成 AI 经营诊断报告").click()
+    app.run()
+    assert not app.exception
+    assert any(button.label == "下载经营诊断报告" for button in app.get("download_button"))
+
+
+def test_streamlit_group_creation_has_real_feedback():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    next(button for button in app.sidebar.button if button.label == "新建分组").click()
+    app.run()
+    group_name = next(item for item in app.text_input if item.label == "分组名称")
+    group_name.input("本周项目")
+    next(button for button in app.button if button.label == "创建分组").click()
+    app.run()
+    assert not app.exception
+    assert app.session_state["database_groups"] == ["本周项目"]
+    assert any("本周项目" in item.value for item in app.sidebar.markdown)
+
+
+def test_workspace_toolbar_uses_one_clear_database_menu():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    content = (APP_PATH.parent / "data" / "orders.csv").read_bytes()
+    create_database(app.session_state, "实验1", content)
+    app.run()
+    assert not app.exception
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert '"更多", icon=":material/more_horiz:"' in source
+    assert 'st.popover("⌄"' not in source
+
+
+def test_complex_multi_dimension_answer_uses_dynamic_single_column_layout(rich_csv):
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    project = create_database(app.session_state, "多维分析", rich_csv)
+    orders, _ = process_order_csv(rich_csv)
+    metrics = calculate_metrics(orders)
+    caps = detect_data_capabilities(orders)
+    trend = run_analysis(QuestionType.TREND, "最近销售为什么下降？", orders, metrics, caps)
+    product = run_analysis(QuestionType.PRODUCT, "从商品角度分析", orders, metrics, caps)
+    channel = run_analysis(QuestionType.CHANNEL, "从渠道角度分析", orders, metrics, caps)
+    plan = IntentPlan("trend", "revenue", "visualize", True)
+    response = AgentResponse(
+        answer="最近一周销售变化主要需要从订单量、商品和渠道结构共同判断。",
+        steps=(
+            AgentStep(1, "analyze_trend", {}, trend.conclusion, True, 1),
+            AgentStep(2, "analyze_product", {}, product.conclusion, True, 1),
+            AgentStep(3, "analyze_channel", {}, channel.conclusion, True, 1),
+            AgentStep(4, "create_visualization", {}, "趋势图", True, 1),
+        ),
+        visualizations=(VisualizationSpec("trend", "revenue", "line"),),
+        fallback_used=False,
+        fallback_level="agent",
+        stop_reason="final_answer",
+        primary_result=trend,
+        plan=plan,
+        analysis_results=(("trend", trend), ("product", product), ("channel", channel)),
+        skills_used=("business-diagnosis",),
+    )
+    project.chat_messages.extend((
+        {"role": "user", "content": "最近销售为什么下降？从商品和渠道两个角度帮我分析，并画一张图。"},
+        {
+            "role": "assistant", "content": response.answer, "result": trend,
+            "plan": plan, "agent_response": response, "user_goal": "最近销售为什么下降？",
+        },
+    ))
+    app.run()
+    assert not app.exception
+    html = "\n".join(item.value for item in app.markdown)
+    assert "assistant-answer" in html
+    assert "kpi-summary" in html
+    assert "销售趋势" in html and "商品表现" in html and "渠道表现" in html
+    assert "AI 诊断" not in html and "建议优先关注" not in html
+    assert len(app.expander) == 1
+    assert any("使用经营诊断 Skill" in item.value for item in app.markdown)
+    assert app.get("arrow_vega_lite_chart")
+
+
+def test_streamlit_database_search_and_switch_are_isolated():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    content = (APP_PATH.parent / "data" / "orders.csv").read_bytes()
+    campus = create_database(app.session_state, "校园团购", content)
+    campus.chat_messages.append({"role": "user", "content": "校园数据库问题"})
+    recruitment = create_database(app.session_state, "秋招", content)
+    recruitment.chat_messages.append({"role": "user", "content": "秋招数据库问题"})
+
+    app.run()
+    assert any("秋招数据库问题" in item.value for item in app.markdown)
+    next(button for button in app.button if button.label == "校园团购").click()
+    app.run()
+    assert app.session_state["active_database_id"] == campus.database_id
+    assert any("校园数据库问题" in item.value for item in app.markdown)
+    assert not any("秋招数据库问题" in item.value for item in app.markdown)
+
+    next(item for item in app.text_input if item.label == "搜索数据库").input("秋招")
+    app.run()
+    database_buttons = {button.label for button in app.sidebar.button}
+    assert "秋招" in database_buttons
+    assert "校园团购" not in database_buttons
