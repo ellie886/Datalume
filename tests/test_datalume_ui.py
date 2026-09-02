@@ -1,4 +1,6 @@
-from database_manager import create_database, get_active_database, initialize_database_state, replace_database_data, search_databases, switch_database, toggle_database_pin
+import pytest
+
+from database_manager import create_database, delete_database, get_active_database, initialize_database_state, rename_database, replace_database_data, search_databases, switch_database, toggle_database_pin
 from data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
 from router import QuestionType
 from visualization import build_visualization, visualization_kind
@@ -83,6 +85,107 @@ def test_created_databases_and_search_use_real_names(rich_csv):
     assert set(state["databases"]) == {campus.database_id, recruitment.database_id}
     assert [project.name for project in search_databases(state, "秋")] == ["秋招"]
     assert {project.name for project in search_databases(state, "")} == {"校园团购", "秋招"}
+
+
+def test_rename_database_preserves_identity_and_all_project_state(rich_csv):
+    state = {}
+    initialize_database_state(state)
+    project = create_database(state, "校园团购", rich_csv, pinned=True)
+    project.chat_messages.append({"role": "user", "content": "问题"})
+    project.conversation_context["previous_intent"] = "trend"
+    project.agent_history.append({"tools": ["analyze_trend"]})
+    project.diagnostic_report = {"report": "保留"}
+    project.diagnostic_report_source_id = project.data_source_id
+    original_id = project.database_id
+    original_source = project.data_source_id
+
+    renamed = rename_database(state, original_id, "  校园零售经营数据  ")
+
+    assert renamed is project
+    assert renamed.name == "校园零售经营数据"
+    assert state["active_database_id"] == original_id
+    assert state["databases"][original_id] is project
+    assert project.pinned is True
+    assert project.csv_content == rich_csv
+    assert project.data_source_id == original_source
+    assert project.chat_messages == [{"role": "user", "content": "问题"}]
+    assert project.conversation_context == {"previous_intent": "trend"}
+    assert project.agent_history == [{"tools": ["analyze_trend"]}]
+    assert project.diagnostic_report == {"report": "保留"}
+    assert project.diagnostic_report_source_id == original_source
+
+
+def test_rename_database_rejects_empty_and_duplicate_names(rich_csv):
+    state = {}
+    initialize_database_state(state)
+    first = create_database(state, "校园团购", rich_csv)
+    second = create_database(state, "秋招", rich_csv)
+    with pytest.raises(ValueError, match="不能为空"):
+        rename_database(state, second.database_id, "   ")
+    with pytest.raises(ValueError, match="同名"):
+        rename_database(state, second.database_id, "  校园团购 ")
+    with pytest.raises(ValueError, match="同名"):
+        rename_database(state, second.database_id, "校园团购".upper())
+    assert first.name == "校园团购"
+    assert second.name == "秋招"
+    assert state["active_database_id"] == second.database_id
+
+
+def test_delete_non_active_database_keeps_active_project(rich_csv):
+    state = {}
+    initialize_database_state(state)
+    first = create_database(state, "校园团购", rich_csv)
+    second = create_database(state, "秋招", rich_csv)
+    active = delete_database(state, first.database_id)
+    assert active is second
+    assert state["active_database_id"] == second.database_id
+    assert set(state["databases"]) == {second.database_id}
+
+
+def test_delete_active_database_selects_pinned_before_other_databases(rich_csv):
+    state = {}
+    initialize_database_state(state)
+    pinned = create_database(state, "置顶项目", rich_csv, pinned=True)
+    create_database(state, "普通项目", rich_csv)
+    active = create_database(state, "待删除", rich_csv)
+    selected = delete_database(state, active.database_id)
+    assert selected is pinned
+    assert state["active_database_id"] == pinned.database_id
+
+
+def test_delete_last_database_clears_private_state_and_returns_to_empty(rich_csv):
+    state = {}
+    initialize_database_state(state)
+    project = create_database(state, "唯一项目", rich_csv, pinned=True)
+    project.chat_messages.append({"role": "user", "content": "问题"})
+    project.conversation_context["previous_intent"] = "product"
+    project.agent_history.append({"tools": ["analyze_product"]})
+    project.diagnostic_report = "报告"
+    project.diagnostic_report_source_id = project.data_source_id
+
+    assert delete_database(state, project.database_id) is None
+    assert state["databases"] == {}
+    assert state["active_database_id"] is None
+    assert project.csv_content == b""
+    assert project.data_source_id == ""
+    assert project.pinned is False
+    assert project.chat_messages == []
+    assert project.conversation_context == {}
+    assert project.agent_history == []
+    assert project.diagnostic_report is None
+    assert project.diagnostic_report_source_id is None
+
+
+def test_delete_pinned_database_removes_it_from_navigation(rich_csv):
+    state = {}
+    initialize_database_state(state)
+    pinned = create_database(state, "置顶项目", rich_csv, pinned=True)
+    remaining = create_database(state, "保留项目", rich_csv)
+    delete_database(state, pinned.database_id)
+    assert [project.database_id for project in search_databases(state)] == [
+        remaining.database_id
+    ]
+    assert all(not project.pinned for project in state["databases"].values())
 
 
 def test_visualization_mapping():

@@ -94,6 +94,87 @@ def test_workspace_toolbar_uses_one_clear_database_menu():
     assert 'st.popover("⌄"' not in source
 
 
+def test_streamlit_database_rename_updates_navigation_and_preserves_state():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    content = (APP_PATH.parent / "data" / "orders.csv").read_bytes()
+    project = create_database(app.session_state, "校园团购", content, pinned=True)
+    project.chat_messages.append({"role": "user", "content": "保留的问题"})
+    project.conversation_context["previous_intent"] = "product"
+    project.agent_history.append({"tools": ["analyze_product"]})
+    project.diagnostic_report = "保留的报告"
+    source_id = project.data_source_id
+    app.run()
+
+    next(button for button in app.button if button.label == "重命名").click()
+    app.run()
+    name_input = next(item for item in app.text_input if item.label == "数据库名称")
+    assert name_input.value == "校园团购"
+    name_input.input("  校园零售经营数据  ")
+    app.run()
+    next(button for button in app.button if button.label == "保存").click()
+    app.run()
+
+    assert not app.exception
+    assert project.name == "校园零售经营数据"
+    assert app.session_state["active_database_id"] == project.database_id
+    assert project.pinned is True
+    assert project.csv_content == content
+    assert project.data_source_id == source_id
+    assert project.chat_messages == [{"role": "user", "content": "保留的问题"}]
+    assert project.conversation_context == {"previous_intent": "product"}
+    assert project.agent_history == [{"tools": ["analyze_product"]}]
+    assert project.diagnostic_report == "保留的报告"
+    assert any(button.label == "校园零售经营数据" for button in app.sidebar.button)
+    assert not any(button.label == "校园团购" for button in app.sidebar.button)
+
+
+def test_streamlit_delete_requires_confirmation_and_selects_pinned_database():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    content = (APP_PATH.parent / "data" / "orders.csv").read_bytes()
+    pinned = create_database(app.session_state, "置顶项目", content, pinned=True)
+    active = create_database(app.session_state, "待删除项目", content)
+    active.chat_messages.append({"role": "user", "content": "即将删除的问题"})
+    active.conversation_context["previous_intent"] = "trend"
+    active.agent_history.append({"tools": ["analyze_trend"]})
+    active.diagnostic_report = "即将删除的报告"
+    app.run()
+
+    next(button for button in app.button if button.label == "删除数据库").click()
+    app.run()
+    assert active.database_id in app.session_state["databases"]
+    assert any("删除“待删除项目”" in item.value for item in app.markdown)
+    next(button for button in app.button if button.label == "删除").click()
+    app.run()
+
+    assert not app.exception
+    assert active.database_id not in app.session_state["databases"]
+    assert app.session_state["active_database_id"] == pinned.database_id
+    assert active.csv_content == b""
+    assert active.chat_messages == []
+    assert active.conversation_context == {}
+    assert active.agent_history == []
+    assert active.diagnostic_report is None
+    assert any(button.label == "置顶项目" for button in app.sidebar.button)
+    assert not any("即将删除的问题" in item.value for item in app.markdown)
+
+
+def test_streamlit_delete_last_database_returns_to_initial_empty_state():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    content = (APP_PATH.parent / "data" / "orders.csv").read_bytes()
+    project = create_database(app.session_state, "最后一个项目", content)
+    app.run()
+    next(button for button in app.button if button.label == "删除数据库").click()
+    app.run()
+    next(button for button in app.button if button.label == "删除").click()
+    app.run()
+
+    assert not app.exception
+    assert project.database_id not in app.session_state["databases"]
+    assert app.session_state["active_database_id"] is None
+    assert len(app.chat_input) == 0
+    assert any("从数据开始" in item.value for item in app.markdown)
+
+
 def test_complex_multi_dimension_answer_uses_dynamic_single_column_layout(rich_csv):
     app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
     project = create_database(app.session_state, "多维分析", rich_csv)

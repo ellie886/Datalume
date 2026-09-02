@@ -23,8 +23,10 @@ from data_processor import (
 from database_manager import (
     DatabaseProject,
     create_database,
+    delete_database,
     get_active_database,
     initialize_database_state,
+    rename_database,
     replace_database_data,
     search_databases,
     switch_database,
@@ -135,6 +137,60 @@ def _render_create_database() -> None:
         st.session_state["show_create_database"] = True
     if st.session_state.get("show_create_database", False):
         _create_database_dialog()
+
+
+@st.dialog("重命名数据库", width="small")
+def _rename_database_dialog(project: DatabaseProject) -> None:
+    input_key = f"rename_database_name_{project.database_id}"
+    name = st.text_input(
+        "数据库名称",
+        value=project.name,
+        key=input_key,
+    )
+    cancel_col, save_col = st.columns(2)
+    if cancel_col.button(
+        "取消", key=f"cancel_rename_{project.database_id}",
+        use_container_width=True,
+    ):
+        st.session_state["show_rename_database_id"] = None
+        st.rerun()
+    if save_col.button(
+        "保存", key=f"save_rename_{project.database_id}", type="primary",
+        use_container_width=True,
+    ):
+        try:
+            rename_database(st.session_state, project.database_id, name)
+        except ValueError as error:
+            st.error(str(error))
+        else:
+            st.session_state["show_rename_database_id"] = None
+            st.rerun()
+
+
+@st.dialog("删除数据库", width="small")
+def _delete_database_dialog(project: DatabaseProject) -> None:
+    st.markdown(f"### 删除“{escape(project.name)}”？")
+    st.write(
+        "删除后，该数据库在当前会话中的上传数据、对话记录、Agent 上下文、"
+        "分析结果和报告都将被移除。"
+    )
+    cancel_col, delete_col = st.columns(2)
+    if cancel_col.button(
+        "取消", key=f"cancel_delete_{project.database_id}",
+        use_container_width=True,
+    ):
+        st.session_state["show_delete_database_id"] = None
+        st.rerun()
+    if delete_col.button(
+        "删除", key=f"confirm_delete_{project.database_id}", type="primary",
+        use_container_width=True,
+    ):
+        database_id = project.database_id
+        delete_database(st.session_state, database_id)
+        st.session_state["show_delete_database_id"] = None
+        st.session_state["show_rename_database_id"] = None
+        st.session_state.pop(f"rename_database_name_{database_id}", None)
+        st.rerun()
 
 
 @st.dialog("新建分组", width="small")
@@ -299,6 +355,19 @@ def _render_workspace_toolbar(project, orders, quality, overview, metrics, capab
             use_container_width=True,
         ):
             st.markdown("**数据库**")
+            if st.button(
+                "重命名", icon=":material/edit:", key=f"rename_{project.database_id}",
+                use_container_width=True,
+            ):
+                st.session_state["show_delete_database_id"] = None
+                st.session_state["show_rename_database_id"] = project.database_id
+            if st.button(
+                "删除数据库", icon=":material/delete:", key=f"delete_{project.database_id}",
+                use_container_width=True,
+            ):
+                st.session_state["show_rename_database_id"] = None
+                st.session_state["show_delete_database_id"] = project.database_id
+            st.divider()
             _render_data_management(project, overview, quality, capabilities)
             st.divider()
             if st.button(
@@ -324,6 +393,10 @@ def _render_workspace_toolbar(project, orders, quality, overview, metrics, capab
                     use_container_width=True,
                 ):
                     _report_dialog(project)
+    if st.session_state.get("show_rename_database_id") == project.database_id:
+        _rename_database_dialog(project)
+    if st.session_state.get("show_delete_database_id") == project.database_id:
+        _delete_database_dialog(project)
     st.markdown('<div class="header-rule"></div>', unsafe_allow_html=True)
 
 
@@ -386,6 +459,8 @@ def main() -> None:
     initialize_database_state(st.session_state)
     st.session_state.setdefault("database_groups", [])
     st.session_state.setdefault("show_create_group", False)
+    st.session_state.setdefault("show_rename_database_id", None)
+    st.session_state.setdefault("show_delete_database_id", None)
     render_sidebar(logo_path)
     project = get_active_database(st.session_state)
     if project is None:

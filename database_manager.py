@@ -66,6 +66,56 @@ def switch_database(state: MutableMapping[str, Any], database_id: str) -> None:
     state["active_database_id"] = database_id
 
 
+def rename_database(
+    state: MutableMapping[str, Any], database_id: str, name: str
+) -> DatabaseProject:
+    """只修改显示名称；稳定的 database_id 和项目私有状态保持不变。"""
+
+    if database_id not in state["databases"]:
+        raise KeyError(f"数据库不存在：{database_id}")
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        raise ValueError("数据库名称不能为空。")
+    duplicate = any(
+        project.database_id != database_id
+        and project.name.strip().casefold() == cleaned_name.casefold()
+        for project in state["databases"].values()
+    )
+    if duplicate:
+        raise ValueError("已存在同名数据库。")
+    project = state["databases"][database_id]
+    project.name = cleaned_name
+    return project
+
+
+def delete_database(
+    state: MutableMapping[str, Any], database_id: str
+) -> DatabaseProject | None:
+    """删除一个会话数据库，并在需要时按置顶优先选择新的 active。"""
+
+    if database_id not in state["databases"]:
+        raise KeyError(f"数据库不存在：{database_id}")
+    was_active = state.get("active_database_id") == database_id
+    project = state["databases"].pop(database_id)
+
+    # 主动释放只属于被删除项目的会话数据，避免外部旧引用继续持有内容。
+    project.csv_content = b""
+    project.data_source_id = ""
+    project.pinned = False
+    project.chat_messages.clear()
+    project.conversation_context.clear()
+    project.agent_history.clear()
+    project.diagnostic_report = None
+    project.diagnostic_report_source_id = None
+
+    if was_active:
+        remaining = search_databases(state)
+        state["active_database_id"] = (
+            remaining[0].database_id if remaining else None
+        )
+    return get_active_database(state)
+
+
 def toggle_database_pin(
     state: MutableMapping[str, Any], database_id: str
 ) -> bool:
