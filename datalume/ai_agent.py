@@ -7,10 +7,10 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 import pandas as pd
 
-from analysis_engine import AnalysisResult, run_analysis
-from data_processor import BusinessMetrics, DataCapabilities, detect_data_capabilities
-from deepseek_client import DeepSeekClient, DeepSeekError, IntentPlan, analysis_payload
-from router import QuestionType, classify_question, get_question_type_label, has_explicit_intent
+from .analysis_engine import AnalysisResult, run_analysis
+from .data_processor import BusinessMetrics, DataCapabilities, detect_data_capabilities
+from .deepseek_client import DeepSeekClient, DeepSeekError, IntentPlan, analysis_payload
+from .router import QuestionType, classify_question, get_question_type_label, has_explicit_intent
 
 
 @dataclass(frozen=True)

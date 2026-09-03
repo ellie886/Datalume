@@ -7,8 +7,8 @@ from typing import Any
 
 import pandas as pd
 
-from data_processor import BusinessMetrics, DataCapabilities
-from router import QuestionType
+from .data_processor import BusinessMetrics, DataCapabilities
+from .router import QuestionType
 
 
 def money(value: float) -> str:

@@ -12,14 +12,14 @@ from typing import Any, Mapping, MutableMapping
 
 from dotenv import load_dotenv
 
-from agent_models import AgentResponse, AgentState, AgentStep, AgentToolResult
-from agent_tools import AgentToolContext, AgentToolRegistry
-from ai_agent import analyze_question
-from analysis_engine import AnalysisResult
-from data_processor import BusinessMetrics, DataCapabilities, DataOverview
-from deepseek_client import DeepSeekClient, DeepSeekError, IntentPlan, analysis_payload, capability_payload
-from router import QuestionType
-from skill_loader import (
+from .agent_models import AgentResponse, AgentState, AgentStep, AgentToolResult
+from .agent_tools import AgentToolContext, AgentToolRegistry
+from .ai_agent import analyze_question
+from .analysis_engine import AnalysisResult
+from .data_processor import BusinessMetrics, DataCapabilities, DataOverview
+from .deepseek_client import DeepSeekClient, DeepSeekError, IntentPlan, analysis_payload, capability_payload
+from .router import QuestionType
+from .skill_loader import (
     LoadedSkill,
     SkillLoader,
     SkillLoadError,
@@ -28,7 +28,7 @@ from skill_loader import (
 
 
 LOGGER = logging.getLogger(__name__)
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MAX_AGENT_STEPS = 4
 
 

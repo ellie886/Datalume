@@ -168,24 +168,32 @@ Registry 不提供 Shell、任意 Python、文件删除或通用 HTTP 请求工�
 
 ```text
 Datalume/
-├── app.py                         # Streamlit 应用与交互编排
-├── agent_runtime.py               # 多步 Agent Loop、停止条件与回退
-├── agent_tools.py                 # 白名单 Tool Registry
-├── agent_models.py                # Agent 状态、Step、Observation 数据模型
-├── deepseek_client.py             # DeepSeek OpenAI-compatible 客户端
-├── skill_loader.py                # Skill metadata 发现与按需加载
+├── app.py                         # Streamlit 应用入口与交互编排
+├── datalume/                      # 核心 Python package
+│   ├── agent_runtime.py           # 多步 Agent Loop、停止条件与回退
+│   ├── agent_tools.py             # 白名单 Tool Registry
+│   ├── agent_models.py            # Agent 状态、Step、Observation 数据模型
+│   ├── ai_agent.py               # 单步 LLM 编排与确定性回退
+│   ├── deepseek_client.py         # DeepSeek OpenAI-compatible 客户端
+│   ├── skill_loader.py            # Skill metadata 发现与按需加载
+│   ├── router.py                  # 确定性意图识别回退
+│   ├── analysis_engine.py         # 七类真实业务分析
+│   ├── data_processor.py          # CSV 校验、清洗、指标与能力检测
+│   ├── database_manager.py        # 多数据库状态隔离与管理
+│   ├── report_generator.py        # 经营诊断报告与 Markdown 内容
+│   ├── ui_components.py           # Datalume UI 组件
+│   ├── visualization.py           # 动态 Altair 图表
+│   └── assets/                    # 产品品牌资产
 ├── skills/
 │   └── business-diagnosis/
 │       └── SKILL.md               # 经营诊断方法与边界
-├── analysis_engine.py             # 七类真实业务分析
-├── data_processor.py              # CSV 校验、清洗、指标与能力检测
-├── visualization.py               # 动态 Altair 图表
-├── database_manager.py            # 多数据库状态隔离与管理
-├── report_generator.py            # 经营诊断报告与 Markdown 内容
-├── ui_components.py               # Datalume UI 组件
+├── data/
+│   ├── demo_orders.csv            # 完整 Agent Demo 经营数据
+│   └── orders.csv                 # 最小回归测试样例
 ├── docs/images/                   # 产品真实截图
-├── data/                           # 示例经营数据
-└── tests/                          # 自动化测试
+├── tests/                         # 自动化测试
+├── .env.example                   # 安全的环境变量示例
+└── requirements.txt               # 运行依赖
 ```
 
 ## Quick Start
@@ -200,25 +208,27 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-在项目根目录创建 `.env`：
+复制环境变量示例，并在本地 `.env` 中填写自己的 Key：
 
-```dotenv
-DEEPSEEK_API_KEY=your_api_key_here
+```bash
+cp .env.example .env
 ```
 
 不要提交真实 API Key。没有配置 Key 时，应用仍可启动，并会回退到确定性的基础分析模式；多步 LLM Agent 与自然语言生成需要可用的 DeepSeek API。
 
+启动后可创建数据库并上传 `data/demo_orders.csv` 体验完整的商品、用户、渠道、复购、利润与趋势分析。
+
 启动应用：
 
 ```bash
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
 ## Testing
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q
+python -m pytest -q
 ```
 
 当前版本已通过 **99 automated tests**，覆盖：

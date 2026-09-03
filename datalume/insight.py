@@ -1,4 +1,4 @@
-from ai_agent import generate_operation_summary
+from .ai_agent import generate_operation_summary
 
 
 def generate_auto_insights(metrics):

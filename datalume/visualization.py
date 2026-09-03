@@ -7,9 +7,9 @@ from typing import Literal
 import altair as alt
 import pandas as pd
 
-from analysis_engine import AnalysisResult
-from data_processor import DataCapabilities
-from router import QuestionType
+from .analysis_engine import AnalysisResult
+from .data_processor import DataCapabilities
+from .router import QuestionType
 
 
 VisualizationKind = Literal["line", "bar", "profit", "channel", "repurchase", "user", "none"]

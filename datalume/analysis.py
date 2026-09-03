@@ -1,4 +1,4 @@
-from ai_agent import generate_operation_summary
+from .ai_agent import generate_operation_summary
 
 
 def generate_operation_advice(top_product, top_gender, top_grade, total_sales, order_count, avg_order_value, top_product_ratio):

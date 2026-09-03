@@ -1,5 +1,5 @@
-from data_processor import calculate_metrics, process_order_csv, summarize_orders
-from report_generator import generate_diagnostic_report
+from datalume.data_processor import calculate_metrics, process_order_csv, summarize_orders
+from datalume.report_generator import generate_diagnostic_report
 
 
 def test_default_report_generated(default_bundle):

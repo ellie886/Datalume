@@ -2,12 +2,12 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from agent_models import AgentResponse, AgentStep, VisualizationSpec
-from analysis_engine import run_analysis
-from database_manager import create_database
-from data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
-from deepseek_client import IntentPlan
-from router import QuestionType
+from datalume.agent_models import AgentResponse, AgentStep, VisualizationSpec
+from datalume.analysis_engine import run_analysis
+from datalume.database_manager import create_database
+from datalume.data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
+from datalume.deepseek_client import IntentPlan
+from datalume.router import QuestionType
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -18,7 +18,9 @@ def test_streamlit_initial_view_runs():
     assert not app.exception
     assert len(app.chat_input) == 0
     assert len(app.session_state["databases"]) == 0
-    assert any("从数据开始" in item.value for item in app.markdown)
+    assert not any("从数据开始" in item.value for item in app.markdown)
+    assert any(button.label == "新建数据库" for button in app.sidebar.button)
+    assert not any(button.label == "新建数据库" for button in app.main.button)
     assert not any(button.label == "生成 AI 经营诊断报告" for button in app.button)
     assert not any("校园团购" in button.label for button in app.button)
     assert not app.expander
@@ -172,7 +174,9 @@ def test_streamlit_delete_last_database_returns_to_initial_empty_state():
     assert project.database_id not in app.session_state["databases"]
     assert app.session_state["active_database_id"] is None
     assert len(app.chat_input) == 0
-    assert any("从数据开始" in item.value for item in app.markdown)
+    assert not any("从数据开始" in item.value for item in app.markdown)
+    assert any(button.label == "新建数据库" for button in app.sidebar.button)
+    assert not any(button.label == "新建数据库" for button in app.main.button)
 
 
 def test_complex_multi_dimension_answer_uses_dynamic_single_column_layout(rich_csv):

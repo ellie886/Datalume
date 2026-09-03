@@ -1,11 +1,13 @@
 import pytest
 
-from database_manager import create_database, delete_database, get_active_database, initialize_database_state, rename_database, replace_database_data, search_databases, switch_database, toggle_database_pin
-from data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
-from router import QuestionType
-from visualization import build_visualization, visualization_kind
-from deepseek_client import IntentPlan
-from ui_components import (
+from datalume.database_manager import create_database, delete_database, get_active_database, initialize_database_state, rename_database, replace_database_data, search_databases, switch_database, toggle_database_pin
+from datalume.data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
+from datalume.ai_agent import analyze_question
+from datalume.analysis_engine import product_analysis
+from datalume.router import QuestionType
+from datalume.visualization import build_visualization, visualization_kind
+from datalume.deepseek_client import IntentPlan
+from datalume.ui_components import (
     _answer_html,
     _meaningful_diagnoses,
     _should_show_suggestions,
@@ -198,14 +200,12 @@ def test_visualization_mapping():
 
 
 def test_product_visualization_builds(default_bundle):
-    from ai_agent import analyze_question
     orders, _, _, metrics, caps = default_bundle
     result = analyze_question("哪个商品销量最高？", metrics, orders=orders, capabilities=caps).result
     assert build_visualization(result.intent, orders, result, caps) is not None
 
 
 def test_unsupported_analysis_has_no_chart(default_bundle):
-    from ai_agent import analyze_question
     orders, _, _, metrics, caps = default_bundle
     result = analyze_question("哪个渠道最好？", metrics, orders=orders, capabilities=caps).result
     assert build_visualization(result.intent, orders, result, caps) is None
@@ -231,7 +231,7 @@ def test_answer_html_keeps_natural_language_in_one_text_flow():
 
 def test_suggestions_are_only_shown_for_recommendation_context(default_bundle):
     orders, _, _, metrics, caps = default_bundle
-    product = __import__("analysis_engine").product_analysis("哪个商品销量最高？", orders, metrics)
+    product = product_analysis("哪个商品销量最高？", orders, metrics)
     assert not _should_show_suggestions(
         product, IntentPlan("product", "quantity", "analyze"), (("product", product),)
     )
@@ -242,7 +242,7 @@ def test_suggestions_are_only_shown_for_recommendation_context(default_bundle):
 
 def test_irrelevant_profit_caveat_is_hidden_outside_profit(default_bundle):
     orders, _, _, metrics, caps = default_bundle
-    product = __import__("analysis_engine").product_analysis("哪个商品销量最高？", orders, metrics)
+    product = product_analysis("哪个商品销量最高？", orders, metrics)
     assert _visible_limitations((("product", product),)) == ()
 
 

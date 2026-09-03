@@ -11,7 +11,8 @@ from typing import Any, BinaryIO
 import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
 
-DEFAULT_DATA_PATH = Path(__file__).resolve().parent / "data" / "orders.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_PATH = PROJECT_ROOT / "data" / "orders.csv"
 REQUIRED_COLUMNS = ("user_id", "product", "price", "quantity", "date", "gender", "grade")
 TEXT_COLUMNS = ("user_id", "product", "gender", "grade")
 OPTIONAL_FIELD_ALIASES = {

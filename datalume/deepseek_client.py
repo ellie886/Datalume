@@ -12,9 +12,9 @@ from typing import Any, Mapping, Sequence
 
 from dotenv import load_dotenv
 
-from agent_models import AgentModelTurn, AgentToolCall
-from analysis_engine import AnalysisResult
-from data_processor import DataCapabilities
+from .agent_models import AgentModelTurn, AgentToolCall
+from .analysis_engine import AnalysisResult
+from .data_processor import DataCapabilities
 
 try:
     from openai import OpenAI
@@ -23,7 +23,7 @@ except ImportError:  # 依赖未安装时仍允许基础分析模式启动
 
 
 LOGGER = logging.getLogger(__name__)
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_TIMEOUT_SECONDS = 20.0

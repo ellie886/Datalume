@@ -10,11 +10,11 @@ from typing import Iterable
 import pandas as pd
 import streamlit as st
 
-from agent_models import AgentResponse
-from analysis_engine import AnalysisResult, order_count, percent_change
-from data_processor import BusinessMetrics, DataCapabilities
-from deepseek_client import IntentPlan
-from visualization import build_visualization
+from .agent_models import AgentResponse
+from .analysis_engine import AnalysisResult, order_count, percent_change
+from .data_processor import BusinessMetrics, DataCapabilities
+from .deepseek_client import IntentPlan
+from .visualization import build_visualization
 
 
 def inject_global_styles() -> None:
@@ -52,10 +52,6 @@ h3 { font-size:.98rem !important; font-weight:650 !important; }
 .empty-orb { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:50%; color:white; background:#111; font-size:1rem; margin-bottom:.8rem; }
 .empty-state h2 { font-size:1.25rem !important; margin-bottom:.35rem; }
 .empty-state p { color:var(--muted); margin:0; }
-.data-start-state { min-height:48vh; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; text-align:center; }
-.data-start-state .empty-orb { width:42px; height:42px; }
-.data-start-state h1 { font-size:1.35rem !important; margin:.1rem 0 .4rem !important; }
-.data-start-state p { color:var(--muted); font-size:.9rem; margin:0; }
 .user-bubble { margin:.2rem 0 .7rem auto; padding:.62rem .9rem; background:#f4f4f3; border-radius:11px; width:fit-content; max-width:72%; font-size:.9rem; }
 .assistant-response { display:grid; grid-template-columns:29px minmax(0,1fr); align-items:start; column-gap:.65rem; width:100%; margin:.05rem 0 .45rem; }
 .assistant-answer { min-width:0; width:100%; color:var(--ink); font-size:.94rem; line-height:1.68; text-align:left; white-space:normal; overflow-wrap:break-word; word-break:normal; }
@@ -442,13 +438,5 @@ def render_empty_state() -> None:
     st.markdown(
         '<div class="empty-state"><div class="empty-orb">✦</div>'
         '<h2>从经营问题开始</h2><p>我会根据当前数据库自动计算指标并选择合适的可视化。</p></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def render_data_start_state() -> None:
-    st.markdown(
-        '<div class="data-start-state"><div class="empty-orb">✦</div>'
-        '<h1>从数据开始</h1><p>创建一个数据库后，就可以直接向数据提问。</p></div>',
         unsafe_allow_html=True,
     )

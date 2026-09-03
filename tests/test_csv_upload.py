@@ -1,7 +1,7 @@
 import pytest
 
 from app import sync_chat_history_with_data_source
-from data_processor import DataValidationError, calculate_metrics, process_order_csv
+from datalume.data_processor import DataValidationError, calculate_metrics, process_order_csv
 
 
 BASE = """date,user_id,product,price,quantity,gender,grade

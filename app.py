@@ -10,17 +10,17 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from agent_runtime import run_agent
-from brand_assets import ensure_logo_asset
-from deepseek_client import DeepSeekClient
-from data_processor import (
+from datalume.agent_runtime import run_agent
+from datalume.brand_assets import ensure_logo_asset
+from datalume.deepseek_client import DeepSeekClient
+from datalume.data_processor import (
     DataValidationError,
     calculate_metrics,
     detect_data_capabilities,
     process_order_csv,
     summarize_orders,
 )
-from database_manager import (
+from datalume.database_manager import (
     DatabaseProject,
     create_database,
     delete_database,
@@ -32,20 +32,19 @@ from database_manager import (
     switch_database,
     toggle_database_pin,
 )
-from insight import generate_auto_insights
-from report_generator import DiagnosticReport, generate_diagnostic_report
-from ui_components import (
+from datalume.insight import generate_auto_insights
+from datalume.report_generator import DiagnosticReport, generate_diagnostic_report
+from datalume.ui_components import (
     comparison_kpis,
     inject_global_styles,
     render_analysis,
     render_brand,
-    render_data_start_state,
     render_empty_state,
     render_kpi_cards,
     render_user_message,
     render_workspace_header,
 )
-from visualization import PALETTE
+from datalume.visualization import PALETTE
 
 
 @st.cache_data(show_spinner=False)
@@ -464,18 +463,6 @@ def main() -> None:
     render_sidebar(logo_path)
     project = get_active_database(st.session_state)
     if project is None:
-        render_data_start_state()
-        action_cols = st.columns([5, 2, 5])
-        with action_cols[1]:
-            if st.button(
-                "新建数据库",
-                icon=":material/add:",
-                type="primary",
-                use_container_width=True,
-                key="empty_create_database",
-            ):
-                st.session_state["show_create_database"] = True
-                st.rerun()
         return
 
     try:

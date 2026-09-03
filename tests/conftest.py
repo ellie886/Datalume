@@ -5,7 +5,7 @@ from io import StringIO
 import pandas as pd
 import pytest
 
-from data_processor import calculate_metrics, detect_data_capabilities, process_order_csv, summarize_orders
+from datalume.data_processor import calculate_metrics, detect_data_capabilities, process_order_csv, summarize_orders
 
 
 @pytest.fixture(autouse=True)

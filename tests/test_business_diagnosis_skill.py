@@ -4,16 +4,16 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from agent_models import AgentModelTurn, AgentToolCall
-from agent_runtime import AgentConfig, run_agent
-from data_processor import (
+from datalume.agent_models import AgentModelTurn, AgentToolCall
+from datalume.agent_runtime import AgentConfig, run_agent
+from datalume.data_processor import (
     calculate_metrics,
     detect_data_capabilities,
     process_order_csv,
     summarize_orders,
 )
-from deepseek_client import DeepSeekClient, DeepSeekConfig, DeepSeekError
-from skill_loader import (
+from datalume.deepseek_client import DeepSeekClient, DeepSeekConfig, DeepSeekError
+from datalume.skill_loader import (
     LoadedSkill,
     SkillLoader,
     SkillLoadError,
@@ -101,7 +101,7 @@ def aov_decline_bundle():
 
 
 def demo_bundle():
-    return bundle_from_bytes((Path("/Users/wyy/Desktop/Datalume/data/demo_orders.csv")).read_bytes())
+    return bundle_from_bytes((PROJECT_ROOT / "data" / "demo_orders.csv").read_bytes())
 
 
 def test_skill_loader_progressively_exposes_metadata_then_full_instructions():

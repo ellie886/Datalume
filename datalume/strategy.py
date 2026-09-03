@@ -1,4 +1,4 @@
-from ai_agent import generate_operation_summary
+from .ai_agent import generate_operation_summary
 
 
 def generate_strategy(total_sales, order_count, top_product, top_gender, top_grade, avg_order_value, top_product_ratio):

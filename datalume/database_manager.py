@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, MutableMapping
 from uuid import uuid4
 
-from data_processor import fingerprint_csv
+from .data_processor import fingerprint_csv
 
 
 @dataclass

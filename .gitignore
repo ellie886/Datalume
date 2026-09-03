@@ -18,6 +18,11 @@ htmlcov/
 .streamlit/secrets.toml
 .streamlit/cache/
 
+.idea/
+.vscode/
+*.code-workspace
+.ipynb_checkpoints/
+
 *.log
 logs/
 log/
@@ -27,3 +32,19 @@ temp/
 *.temp
 *.swp
 *~
+
+uploads/
+outputs/
+reports/
+artifacts/
+*_report.md
+*_report.txt
+
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+
+/screenshot*.png
+/Screenshot*.png

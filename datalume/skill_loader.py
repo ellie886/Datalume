@@ -8,7 +8,7 @@ import re
 from typing import Iterable
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SKILLS_ROOT = PROJECT_ROOT / "skills"
 VALID_SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from data_processor import (
+from .data_processor import (
     BusinessMetrics,
     DataCapabilities,
     DataOverview,

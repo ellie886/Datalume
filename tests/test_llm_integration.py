@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_agent import analyze_question
-from database_manager import create_database, initialize_database_state
-from deepseek_client import DeepSeekClient, DeepSeekConfig, DeepSeekError, IntentPlan
-from router import QuestionType
-from visualization import build_visualization
+from datalume.ai_agent import analyze_question
+from datalume.database_manager import create_database, initialize_database_state
+from datalume.deepseek_client import DeepSeekClient, DeepSeekConfig, DeepSeekError, IntentPlan
+from datalume.router import QuestionType
+from datalume.visualization import build_visualization
 
 
 class MockDeepSeekClient:

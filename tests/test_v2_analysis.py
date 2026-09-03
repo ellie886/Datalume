@@ -1,8 +1,8 @@
 import pytest
 
-from ai_agent import analyze_question
-from data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
-from router import QuestionType, classify_question
+from datalume.ai_agent import analyze_question
+from datalume.data_processor import calculate_metrics, detect_data_capabilities, process_order_csv
+from datalume.router import QuestionType, classify_question
 
 
 def bundle(content):

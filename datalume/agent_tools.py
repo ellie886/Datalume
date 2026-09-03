@@ -8,12 +8,12 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
-from agent_models import AgentToolCall, AgentToolResult, VisualizationSpec
-from analysis_engine import AnalysisResult, run_analysis
-from data_processor import BusinessMetrics, DataCapabilities, DataOverview
-from report_generator import generate_diagnostic_report
-from router import QuestionType
-from visualization import build_visualization, visualization_kind
+from .agent_models import AgentToolCall, AgentToolResult, VisualizationSpec
+from .analysis_engine import AnalysisResult, run_analysis
+from .data_processor import BusinessMetrics, DataCapabilities, DataOverview
+from .report_generator import generate_diagnostic_report
+from .router import QuestionType
+from .visualization import build_visualization, visualization_kind
 
 
 ANALYSIS_TO_INTENT = {

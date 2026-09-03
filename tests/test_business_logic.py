@@ -1,5 +1,5 @@
-from ai_agent import analyze_question, generate_ai_answer
-from router import QuestionType, classify_question
+from datalume.ai_agent import analyze_question, generate_ai_answer
+from datalume.router import QuestionType, classify_question
 
 
 def test_default_core_metrics(default_bundle):

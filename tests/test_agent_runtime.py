@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_models import AgentModelTurn, AgentToolCall
-from agent_runtime import AgentConfig, run_agent
-from agent_tools import AgentToolRegistry
-from ai_agent import analyze_question
-from database_manager import create_database, initialize_database_state
-from data_processor import calculate_metrics, detect_data_capabilities, process_order_csv, summarize_orders
-from deepseek_client import DeepSeekClient, DeepSeekConfig, DeepSeekError, IntentPlan
-from visualization import build_visualization
+from datalume.agent_models import AgentModelTurn, AgentToolCall
+from datalume.agent_runtime import AgentConfig, run_agent
+from datalume.agent_tools import AgentToolRegistry
+from datalume.ai_agent import analyze_question
+from datalume.database_manager import create_database, initialize_database_state
+from datalume.data_processor import calculate_metrics, detect_data_capabilities, process_order_csv, summarize_orders
+from datalume.deepseek_client import DeepSeekClient, DeepSeekConfig, DeepSeekError, IntentPlan
+from datalume.visualization import build_visualization
 
 
 def tool_turn(call_id, name, arguments=None):
