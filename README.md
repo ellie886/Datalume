@@ -1,265 +1,110 @@
 # Datalume
 
-**面向经营分析场景的 AI Data Analysis Agent**
+**上传订单数据，用自然语言完成经营分析。**
 
-> 上传经营数据，直接用自然语言提问，让 Agent 帮你找到数据变化背后的原因。
+<img src="assets/readme-preview/banner.webp" alt="Datalume — AI Business Data Analysis" width="100%">
 
-Datalume 将自然语言交互与真实数据计算结合。用户无需编写 SQL 或 Pandas，即可完成销售趋势、商品、用户、渠道、复购和利润等经营分析。面对“最近销售为什么下降？”这样的复杂问题，Agent 可以调用经营诊断 Skill，自主选择受控分析工具，并根据每一步数据 Observation 决定下一步。
+Datalume 是一个面向订单与零售经营场景的 AI 数据分析 Agent 原型。你可以上传符合字段要求的 CSV / Excel，询问销售变化、商品表现、渠道贡献或复购情况，查看分析结果、图表和 Markdown 经营报告。
 
-![Datalume 产品真实运行界面](docs/images/datalume-demo.png)
+项目从一个常见问题出发：看见销售额下降以后，怎样继续拆解，而不止得到一张报表？Datalume 将分析方法封装为 Skill，由模型选择分析工具，再交给 Python / Pandas 计算。它适合用来体验经营数据对话，也适合学习 Agent、Skill 与 Tool 如何协作。
 
-## What Datalume Can Do
+## 快速开始
 
-| 用户想知道 | Datalume 可以做什么 |
-| --- | --- |
-| 最近经营怎么样？ | 分析销售趋势与核心指标变化。 |
-| 为什么销售下降？ | 拆解订单量、客单价，并继续定位商品、渠道等可能驱动。 |
-| 哪个商品 / 渠道表现最好？ | 基于真实数据计算排名并生成可视化。 |
-| 接下来应该做什么？ | 基于已有分析结果形成经营建议。 |
-
-当前实现覆盖商品、用户、复购、利润、渠道、趋势和策略七类分析，并支持动态可视化、Markdown 经营报告和无 LLM 时的确定性分析回退。
-
-多数据库工作区支持创建、搜索、置顶、切换、重命名和二次确认删除。每个数据库使用稳定的 `database_id` 独立保存 CSV、聊天记录、Agent 上下文、分析历史和报告，切换时不会混用状态；当前版本不提供持久化。
-
-## How Datalume Agent Works
-
-> **Datalume 不让 LLM 直接猜数据答案：LLM 负责理解、决策和工具选择，Python / Pandas 负责真实计算。**
-
-```mermaid
-flowchart TD
-    U[User Query] --> R[Agent Runtime]
-    R --> M[读取 Skill metadata]
-    M --> S{Skill Selection}
-    S -->|复杂经营诊断| B[加载 Business Diagnosis SKILL.md]
-    S -->|简单查询| P[基础 Agent Prompt]
-    B --> L[LLM Agent Decision]
-    P --> L
-    L -->|Tool Call| W[Tool Whitelist]
-    W --> A[Python / Pandas Analysis]
-    A --> O[Compact Observation]
-    O --> L
-    L -->|信息足够| F[Final Answer]
-    L -->|需要图表| V[Altair Visualization]
-    L -->|明确要求报告| G[Diagnostic Report]
-```
-
-### LLM 负责
-
-- 理解用户目标
-- Skill Selection
-- Tool Selection
-- 根据 Observation 决定下一步
-- 组织自然语言回答
-
-### Python / Pandas 负责
-
-- CSV / Excel 数据导入、校验与清洗
-- 核心指标计算
-- 分组聚合分析
-- 周期比较
-- 利润、复购等真实业务计算
-
-核心业务数字必须来自工具返回的 Observation。LLM 不直接读取完整 CSV，也不自行计算或补造指标。
-
-## Business Diagnosis Skill
-
-**Tool Calling 解决 Agent 能做什么，Skill 解决面对一类复杂经营问题应该如何专业完成。**
-
-Datalume 当前的第一个正式 Skill 是 `business-diagnosis`，用于经营变化、下降、异常和问题定位。它定义的方法是：
-
-```text
-确认现象
-→ 指标拆解
-→ 提出最有信息价值的假设
-→ 调用 Tool 验证
-→ 读取 Observation
-→ 接受、降低或排除假设
-→ 继续调查或停止
-```
-
-例如用户提出：
-
-> 最近销售为什么下降？
-
-```text
-analyze_trend
-→ Observation：判断订单量 / 客单价哪个变化更明显
-→ Business Diagnosis Skill 形成下一步假设
-→ 根据数据能力选择 product / channel / user / repurchase Tool
-→ 新 Observation
-→ 支持、降低或排除假设
-→ Final Answer
-```
-
-这不是固定 Pipeline。实际路径可以是 `trend → channel`、`trend → product`，也可以在证据充分或字段不足时提前停止。Agent 根据每一步 Observation 动态选择下一步，不会机械调用全部工具；同期结构变化只作为数据支持的判断，不会被表述为已确认因果。
-
-## Agent / Skill / Tool
-
-此外，`business-metrics` 负责经营指标口径：将“表现最好”“高价值”等表达对应到当前工具支持的指标，区分销量、销售额、利润和毛利率，并说明复购分母、时间范围及字段限制。普通问题可直接比较已有指标；只有口径会改变用户的单一取舍时，才复用 `clarify-analysis-request` 简短确认，用户补充后恢复原问题。该 Skill 不增加计算工具或模型请求轮次。
-
-- **Agent**：决定现在应该做什么。例如先检查销售趋势，再根据订单量变化继续分析渠道。
-- **Skill**：定义一类任务应遵循的专业方法。例如经营诊断要求先确认现象，再拆解指标和验证假设。
-- **Tool**：执行具体、可审计的数据动作。例如计算商品排名、渠道销售额或最近两周趋势。
-
-## Tools
-
-Datalume 的 Tool Registry 只开放以下 9 个白名单工具：
-
-| Tool | 作用 |
-| --- | --- |
-| `analyze_product` | 计算商品销量、销售额、贡献率和排名。 |
-| `analyze_user` | 计算用户结构、消费贡献和高价值用户。 |
-| `analyze_repurchase` | 计算购买次数、复购用户、人群差异和基础 RFM。 |
-| `analyze_profit` | 在成本或利润字段可用时计算利润与毛利率。 |
-| `analyze_channel` | 计算渠道用户、订单、销售额、客单价和复购表现；字段允许时计算 CAC / ROI。 |
-| `analyze_trend` | 比较最近周期与上一可比周期，拆解销售额、订单量和客单价变化。 |
-| `analyze_strategy` | 基于已计算经营指标生成策略建议。 |
-| `create_visualization` | 为已有分析选择安全的内置图表，不执行模型生成代码。 |
-| `generate_report` | 生成确定性的经营诊断报告。 |
-
-Registry 不提供 Shell、任意 Python、文件删除或通用 HTTP 请求工具。
-
-## Progressive Disclosure
-
-`SkillLoader` 采用 metadata-first 发现机制：
-
-1. 默认只读取每个 Skill 的 `name` 和 `description`。
-2. 请求规划阶段读取两个短策略（`clarify-analysis-request` 与 `business-metrics`），在同一次模型请求中判断关键歧义、指标口径和业务 Skill 选择。
-3. 主分析循环只注入选中的业务 Skill 正文：需要明确口径时使用 `business-metrics`，复杂变化原因诊断使用 `business-diagnosis`；明确指标查询可以不加载业务 Skill。
-
-这样可以减少无关说明进入上下文，并为后续增加更多 Skills 保留清晰的扩展边界。项目目前没有对 token 或成本节省做量化声明。
-
-## Reliability & Guardrails
-
-- **DataCapabilities**：自动检测订单号、成本/利润、渠道及获客成本字段，决定哪些结论可被数据支持。
-- **拒绝虚构**：缺少成本时不会把销售额等同利润；缺少渠道时不会用通用建议冒充渠道结论。
-- **Hypothesis Testing**：诊断结论必须来自一个或多个 Tool Observation；数据不支持时降低或排除假设。
-- **Stop Conditions**：证据足够、用户要求已覆盖、字段不足、继续调用没有信息增量或达到步数上限时停止。
-- **Tool whitelist**：模型只能调用预定义工具；未知工具和非法参数会被拒绝。
-- **Step limit**：Agent 默认最多执行 4 步，可通过环境变量在 1–8 步之间配置，避免无限循环。
-- **No arbitrary execution**：不向 LLM 开放任意 Python、Shell 或 HTTP 执行能力。
-- **Compact context**：发送给 LLM 的是字段能力、有限对话上下文和紧凑 Observation，不是完整 CSV 或 DataFrame。
-- **Secret management**：DeepSeek API Key 只从环境变量或本地 `.env` 读取，`.env` 已被 Git 忽略。
-- **Fallback**：LLM Skill Selection 不可用时先使用保守的确定性 Skill 选择；未选中或加载失败时继续不带 Skill 的 Agent。Tool Calling Agent 失败后回退到单步 LLM 分析；LLM 继续失败或未配置时回退到确定性 Pandas 分析。
-
-## Example Queries
-
-```text
-最近销售为什么下降？
-哪个商品销量最高？帮我画出来。
-哪个渠道表现最好？
-复购情况怎么样？
-哪个商品利润最高？
-接下来应该优先优化什么？
-```
-
-分析深度会随 CSV 字段能力变化。例如利润分析需要成本或利润字段，可靠复购分析需要完整 `order_id`，渠道效率分析需要渠道字段。
-
-## Tech Stack
-
-- Python
-- Streamlit
-- Pandas
-- Altair
-- DeepSeek API
-- OpenAI Python SDK（OpenAI-compatible API / Tool Calling）
-- python-dotenv
-- pytest
-
-## Project Structure
-
-```text
-Datalume/
-├── app.py                         # Streamlit 应用入口与交互编排
-├── datalume/                      # 核心 Python package
-│   ├── agent_runtime.py           # 多步 Agent Loop、停止条件与回退
-│   ├── agent_tools.py             # 白名单 Tool Registry
-│   ├── agent_models.py            # Agent 状态、Step、Observation 数据模型
-│   ├── ai_agent.py               # 单步 LLM 编排与确定性回退
-│   ├── deepseek_client.py         # DeepSeek OpenAI-compatible 客户端
-│   ├── skill_loader.py            # Skill metadata 发现与按需加载
-│   ├── router.py                  # 确定性意图识别回退
-│   ├── analysis_engine.py         # 七类真实业务分析
-│   ├── data_processor.py          # CSV/Excel 导入、清洗、指标与能力检测
-│   ├── database_manager.py        # 多数据库状态隔离与管理
-│   ├── report_generator.py        # 经营诊断报告与 Markdown 内容
-│   ├── ui_components.py           # Datalume UI 组件
-│   ├── visualization.py           # 动态 Altair 图表
-│   └── assets/                    # 产品品牌资产
-├── skills/
-│   ├── business-diagnosis/
-│   │   └── SKILL.md               # 经营诊断方法与边界
-│   ├── business-metrics/
-│   │   └── SKILL.md               # 经营指标口径与真实工具限制
-│   └── clarify-analysis-request/
-│       └── SKILL.md               # 关键歧义澄清与任务恢复
-├── data/
-│   ├── demo_orders.csv            # 完整 Agent Demo 经营数据
-│   └── orders.csv                 # 最小回归测试样例
-├── docs/images/                   # 产品真实截图
-├── tests/                         # 自动化测试
-├── .env.example                   # 安全的环境变量示例
-└── requirements.txt               # 运行依赖
-```
-
-## Quick Start
+建议使用 Python 3.12。macOS / Linux：
 
 ```bash
 git clone https://github.com/ellie886/Datalume.git
 cd Datalume
-
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
-
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
 ```
 
-复制环境变量示例，并在本地 `.env` 中填写自己的 Key：
+Windows 可将创建环境的命令换为 `py -3.12 -m venv .venv`，再运行 `.venv\Scripts\Activate.ps1` 激活。
+
+打开终端显示的本地地址，通常为 <http://localhost:8501>：
+
+1. 点击「新建数据库」，上传仓库中的 [演示订单数据](data/demo_orders.csv)。
+2. 输入「哪个商品销量最高？帮我画出来。」查看回答和图表。
+3. 继续询问销售趋势，或通过界面生成、下载经营诊断报告。
+
+**不配置 API Key 也能体验确定性的基础分析。** 多步模型决策、Skill 选择和生成式回答需要可用的 DeepSeek API。启用时先停止应用，复制环境变量示例，在本地 `.env` 中填写自己的 Key 和账户可用的模型名，再重新启动：
 
 ```bash
 cp .env.example .env
 ```
 
-不要提交真实 API Key。没有配置 Key 时，应用仍可启动，并会回退到确定性的基础分析模式；多步 LLM Agent 与自然语言生成需要可用的 DeepSeek API。
+[配置示例](.env.example) 中的 Key 默认为空；真实 Key 只保留在本地。
 
-启动后可创建数据库，上传 CSV 或 Excel（`.xlsx` / `.xls`）。多工作表文件会显示“选择工作表”，每次导入一张表，首行需包含现有订单字段。可用 `data/demo_orders.csv` 体验完整的商品、用户、渠道、复购、利润与趋势分析。
+## 可以怎样用
 
-Excel 选中的工作表在内存中转换为 CSV，再进入相同的校验、分析和会话隔离流程；不保存原始工作簿、不执行 Excel 公式，也不自动合并工作表。替换当前数据源同样支持 Excel，确认替换后才清空旧对话与报告。
+| 想回答的问题 | 当前可以得到的结果 |
+| --- | --- |
+| 最近一周销售额有什么变化？ | 比较两个七天周期的销售额、订单量、客单价与用户数。 |
+| 哪个商品销量最高？帮我画出来。 | 计算商品排名，并按明确画图请求生成可视化。 |
+| 渠道表现和复购情况怎么样？ | 在字段支持时，比较渠道销售表现与用户购买情况。 |
 
-启动应用：
+下面是现有演示数据的产品界面展示，包含真实运行截图；其中数字仅属于演示数据。
+
+<img src="assets/readme-preview/features.webp" alt="Datalume 演示订单分析：对话、核心指标和销售趋势图" width="100%">
+
+当前覆盖商品、用户、复购、利润、渠道、趋势、策略七类分析。分析过程可以展开查看，已有结果可以生成 Markdown 报告；多个数据工作区分别保存各自的对话、数据和报告。
+
+## Agent 怎样分析
+
+模型负责理解问题、规划下一步和组织回答，Python / Pandas 负责指标计算。每次工具执行会返回 Observation，Agent 据此决定是否继续分析；默认最多执行四次工具。
+
+比如「最近销售为什么下降？」通常先检查趋势，拆解订单量与客单价，再根据数据能力和工具结果决定是否调查商品或渠道。具体路径由每步结果决定，证据不足时应说明限制。
+
+| Skill | 负责的方法 |
+| --- | --- |
+| [Business Diagnosis](skills/business-diagnosis/SKILL.md) | 确认经营变化，拆解指标，提出并验证假设。 |
+| [Business Metrics](skills/business-metrics/SKILL.md) | 区分销量、销售额、利润等指标，说明口径与工具边界。 |
+| [Clarify Analysis Request](skills/clarify-analysis-request/SKILL.md) | 对影响分析方向的关键歧义简短澄清，补充后恢复原任务。 |
+
+请求规划会读取澄清与指标短策略；主分析循环每轮最多加载一个业务 Skill。模型只可调用九个白名单工具，不开放任意 Python、Shell 或通用 HTTP 执行。数字应来自工具结果是当前提示约束，尚无逐数字自动核验器。
+
+详细工具表、加载机制、回退路径与源码入口见 [Agent 与数据说明](docs/agent-guide.md)。
+
+## 数据要求
+
+支持 `.csv`、`.xlsx`、`.xls`。Excel 每次选择一张工作表，首行需要包含以下七列；**当前尚未支持任意结构的企业工作簿**。
+
+| 必填列 | 含义 |
+| --- | --- |
+| `user_id` | 用户标识 |
+| `product` | 商品名称 |
+| `price` | 单价，非负数 |
+| `quantity` | 数量，正整数 |
+| `date` | 可解析的交易日期 |
+| `gender` | 性别分组 |
+| `grade` | 年级分组 |
+
+`order_id` 可提高订单与复购统计的可靠性；`unit_cost`、`total_cost` 或 `profit` 用于利润分析；`channel` 用于渠道分析。字段缺失会限制可回答的问题。具体别名和计算口径见 [数据说明](docs/agent-guide.md#当前计算口径)。
+
+## 当前边界
+
+- 数据工作区保存在 Streamlit 会话中，应用重启后不保留；尚无持久化或用户权限系统。
+- 趋势以数据中的最大日期为基准，比较最近七天与前七天，不代表系统当前日期或自然周。
+- 任意日期、人群、商品或渠道筛选及部分指标重排尚未实现；工具接受参数不代表计算已应用筛选。
+- 导入会清除完全重复行；销售额按 `price × quantity` 计算，尚未完整建模退款、优惠、税费和退货。
+- Excel 不执行公式重算、跨表关联或多行表头整理。利润、复购及渠道效率分析也受字段与口径限制。
+- 诊断属于描述性比较和假设验证，相关变化不足以证明因果；模型回答仍需要结合工具证据判断。
+
+## 开发与测试
+
+技术栈：Python、Streamlit、Pandas、Altair、DeepSeek API 与 OpenAI-compatible SDK；Excel 读取使用 openpyxl / xlrd。
 
 ```bash
-python -m streamlit run app.py
-```
-
-## Testing
-
-```bash
-pip install -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-自动化测试覆盖：
+自动化测试会禁用真实 DeepSeek Key，覆盖数据导入、业务计算、工具调用、Skill 选择、会话隔离和界面交互。依赖目前使用版本范围，尚未提供锁文件。
 
-- CSV / Excel 导入、工作表选择、校验、清洗和 DataCapabilities
-- 七类业务分析与数据不足拒答
-- OpenAI-compatible Tool Calling 与 Tool whitelist
-- 多步 Observation-driven Agent Loop 与停止条件
-- Business Diagnosis Skill 选择、加载、假设验证和失败回退
-- 经营指标口径 Skill 接入、关键歧义澄清、补充恢复及选择失败回退
-- 多数据库创建、搜索、置顶、切换、重命名、删除及状态隔离
-- 动态可视化、报告生成与 Streamlit AppTest
+## 项目与许可
 
-自动化测试会禁用真实 DeepSeek Key，不消耗外部 API。
+作者：[ellie886](https://github.com/ellie886) · 仓库：[Datalume](https://github.com/ellie886/Datalume)
 
-## Known Limitations
-
-- 当前有经营诊断、经营指标口径和请求澄清三个 Skill；请求规划后，主分析循环每轮最多加载一个业务 Skill。
-- LLM 可用时先执行一次请求规划；澄清判断、指标口径和业务 Skill 选择共用该请求。
-- Skill 提供分析方法，不扩展工具能力。当前任意日期/人群筛选、部分指标重排尚未实现；参数被接受不代表实际计算已应用，回答需要保留真实口径限制。
-- 多数据库状态保存在 `st.session_state`，应用重启后不会持久化。
-- 诊断深度受当前 Tool Observation 粒度和当前数据可用字段限制。
-- Excel 每次分析一张工作表；不支持跨表 Join、合并单元格/多行表头自动整理或公式重算。公式单元格需要文件中已有有效缓存值，否则按缺失数据提示。
-- 缺少促销、优惠券、实际支付等字段时，无法继续验证部分客单价变化原因。
-- 复购可靠性依赖完整订单标识；渠道 CAC / ROI 依赖渠道与获客成本字段。
-- 当前诊断属于描述性分析和基于同期证据的判断，不等同于统计因果推断。
+当前仓库尚未提供 `LICENSE` 文件，本文不新增许可证声明。
