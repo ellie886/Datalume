@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from base64 import b64encode
 from html import escape
 from pathlib import Path
 import re
@@ -18,109 +19,33 @@ from .visualization import build_visualization
 
 
 def inject_global_styles() -> None:
-    st.markdown(
-        """
-<style>
-:root { --ink:#171717; --muted:#737373; --line:#e8e8e5; --soft:#f7f7f5; }
-html, body, [class*="css"] { color:var(--ink); }
-.stApp { background:#fff; }
-[data-testid="stSidebar"] { background:#f7f7f5; border-right:1px solid #e5e5e2; min-width:274px; max-width:274px; }
-[data-testid="stSidebar"] > div:first-child { padding:.9rem .8rem .75rem; }
-[data-testid="stSidebar"] [data-testid="stImage"] img { border-radius:10px; }
-.block-container { max-width:1240px; padding:.45rem 2rem 5.75rem; }
-h1,h2,h3,p { letter-spacing:-.012em; }
-h1 { font-size:1.35rem !important; font-weight:650 !important; margin:.15rem 0 .9rem !important; }
-h2 { font-size:1.05rem !important; font-weight:650 !important; }
-h3 { font-size:.98rem !important; font-weight:650 !important; }
-[data-testid="stHeader"] { background:transparent; height:0; }
-[data-testid="stToolbar"] { visibility:hidden; }
-[data-testid="stDecoration"] { display:none; }
-[data-testid="stElementToolbar"], .stElementToolbar { display:none !important; }
-.brand-word { font-size:1.48rem; font-weight:720; letter-spacing:-.04em; line-height:42px; }
-.sidebar-section { margin:1rem .2rem .25rem; font-size:.75rem; font-weight:650; color:#666; }
-.db-caption { color:#999; font-size:.72rem; margin:-.35rem 0 .55rem; }
-.database-group { display:flex; align-items:center; gap:.55rem; color:#555; font-size:.82rem; padding:.5rem .55rem; }
-.group-glyph { color:#888; font-size:.9rem; }
-.sidebar-footer { position:fixed; bottom:.8rem; left:.8rem; width:247px; display:flex; align-items:center; gap:.65rem; padding:.65rem .45rem; border-top:1px solid #e3e3e0; background:#f7f7f5; font-size:.82rem; z-index:10; }
-.user-avatar { width:27px; height:27px; display:grid; place-items:center; border-radius:50%; background:#e5e5e2; color:#555; }
-.settings-glyph { margin-left:auto; color:#555; font-size:1rem; }
-.workspace-head { background:rgba(255,255,255,.97); padding:.8rem .1rem .7rem; }
-.workspace-title { font-size:1.03rem; font-weight:680; display:flex; gap:.6rem; align-items:center; white-space:nowrap; }
-.database-glyph { width:22px; height:22px; border:1.4px solid #222; border-radius:50%/25%; display:inline-flex; align-items:center; justify-content:center; font-size:.7rem; }
-.header-rule { border-bottom:1px solid var(--line); margin:0 0 .75rem; }
-.empty-state { padding:3.4rem 1rem 1.8rem; text-align:center; }
-.empty-orb { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:50%; color:white; background:#111; font-size:1rem; margin-bottom:.8rem; }
-.empty-state h2 { font-size:1.25rem !important; margin-bottom:.35rem; }
-.empty-state p { color:var(--muted); margin:0; }
-.user-bubble { margin:.2rem 0 .7rem auto; padding:.62rem .9rem; background:#f4f4f3; border-radius:11px; width:fit-content; max-width:72%; font-size:.9rem; }
-.assistant-response { display:grid; grid-template-columns:29px minmax(0,1fr); align-items:start; column-gap:.65rem; width:100%; margin:.05rem 0 .45rem; }
-.assistant-answer { min-width:0; width:100%; color:var(--ink); font-size:.94rem; line-height:1.68; text-align:left; white-space:normal; overflow-wrap:break-word; word-break:normal; }
-.assistant-answer p { margin:0 0 .45rem; }
-.assistant-answer p:last-child { margin-bottom:0; }
-.ai-label { display:grid; place-items:center; width:29px; height:29px; background:#111; color:#fff; border-radius:50%; margin-top:.05rem; font-size:.8rem; }
-.kpi-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:.5rem 0 .65rem; }
-.kpi-card { border:1px solid var(--line); border-radius:10px; padding:.72rem .9rem; background:#fff; min-height:90px; box-shadow:0 1px 1px rgba(0,0,0,.015); }
-.kpi-label { font-size:.76rem; color:#666; margin-bottom:.35rem; }
-.kpi-value { font-size:1.43rem; line-height:1.15; font-weight:650; letter-spacing:-.04em; }
-.kpi-delta { font-size:.73rem; color:#888; margin-top:.4rem; }
-.delta-up { color:#c55555; } .delta-down { color:#38875b; } .delta-flat { color:#777; }
-.kpi-summary { display:flex; flex-wrap:wrap; gap:.45rem 1.2rem; margin:.35rem 0 .65rem 2.4rem; padding:.55rem .7rem; border:1px solid var(--line); border-radius:9px; background:#fff; }
-.kpi-summary-item { display:flex; align-items:baseline; gap:.35rem; min-width:0; }
-.kpi-summary-value { font-size:1.02rem; font-weight:680; letter-spacing:-.025em; }
-.kpi-summary-label { color:#666; font-size:.76rem; }
-.kpi-summary-delta { font-size:.72rem; white-space:nowrap; }
-.limit-box { border-top:1px solid var(--line); color:#777; padding:.45rem .15rem 0; margin:.5rem 0 0 2.4rem; max-width:calc(100% - 2.4rem); font-size:.75rem; line-height:1.45; }
-.fallback-note { color:#888; font-size:.73rem; margin:-.25rem 0 .4rem 2.45rem; }
-[data-testid="stChatInput"] { border:1px solid #dededb; border-radius:13px; background:#fff; box-shadow:0 5px 18px rgba(0,0,0,.045); }
-[data-testid="stChatInput"]:focus-within { border-color:#bdbdb9; box-shadow:0 5px 18px rgba(0,0,0,.055); }
-[data-testid="stChatInput"] textarea { min-height:48px !important; padding-left:.9rem !important; }
-[data-testid="stChatInputSubmitButton"] { border-radius:50% !important; background:#111 !important; color:#fff !important; margin-right:.35rem !important; }
-button[kind="secondary"] { border-color:#e4e4e1 !important; background:#fff !important; border-radius:8px !important; }
-button[kind="secondary"]:hover { border-color:#cacac6 !important; color:#111 !important; }
-button[kind="primary"] { background:#111 !important; color:#fff !important; border-color:#111 !important; box-shadow:none !important; }
-[data-testid="stSidebar"] button { min-height:2.15rem; font-size:.84rem; }
-[data-testid="stSidebar"] button[kind="primary"] { background:#ececea !important; color:#171717 !important; border-color:#ececea !important; box-shadow:none !important; }
-[data-testid="stSidebar"] [data-testid="stTextInput"] input { background:#fff; border-color:#e4e4e1; min-height:2.25rem; }
-[data-testid="stPopover"] button { border:0 !important; background:transparent !important; box-shadow:none !important; }
-[data-testid="stFileUploaderDropzone"] { background:#fafaf9; border-color:#e3e3e0; padding:.65rem; }
-[data-testid="stFileUploaderDropzoneInstructions"] > div > span { font-size:.78rem; }
-[data-testid="stMetric"] { border:1px solid var(--line); border-radius:10px; padding:.8rem; }
-[data-testid="stExpander"] { border-color:var(--line); border-radius:10px; }
-[class*="st-key-viz_"] { margin-left:2.4rem; max-width:calc(100% - 2.4rem); border-color:var(--line) !important; border-radius:10px !important; padding:.5rem .7rem .1rem !important; }
-[class*="st-key-viz_"] [data-testid="stMarkdownContainer"] p { font-size:.84rem; margin:0; }
-[class*="st-key-viz_"] [data-testid="stVegaLiteChart"] { margin-top:-.15rem; }
-.analysis-section { margin:.45rem 0 .55rem 2.4rem; max-width:calc(100% - 2.4rem); }
-.analysis-section-title { color:#333; font-size:.82rem; font-weight:660; margin:0 0 .25rem; }
-.analysis-line { display:grid; grid-template-columns:10px minmax(0,1fr); column-gap:.4rem; color:#4f4f4f; font-size:.81rem; line-height:1.55; margin:.18rem 0; }
-.analysis-dot { color:#aaa; }
-.suggestions { margin:.5rem 0 .55rem 2.4rem; padding-top:.4rem; border-top:1px solid var(--line); }
-.suggestion-row { display:grid; grid-template-columns:22px minmax(0,1fr); gap:.5rem; align-items:start; margin:.32rem 0; color:#3f3f3f; font-size:.82rem; line-height:1.5; }
-.suggestion-index { width:22px; height:22px; display:grid; place-items:center; border-radius:50%; background:#f1f1ef; color:#555; font-size:.7rem; }
-.trace-list { color:#666; font-size:.78rem; line-height:1.65; }
-.chart-title { color:#333; font-size:.82rem; font-weight:660; margin:0 0 .1rem; }
-[data-testid="stExpander"] { margin-left:2.4rem; max-width:calc(100% - 2.4rem); background:#fff; }
-[data-testid="stExpander"] summary { font-size:.76rem; color:#777; }
-[data-testid="stVerticalBlock"] { gap:.55rem; }
-[data-testid="stDialog"] [data-testid="stVerticalBlock"] { gap:.7rem; }
-@media(max-width:900px){ .kpi-grid{grid-template-columns:repeat(2,1fr)} .block-container{padding-left:1rem;padding-right:1rem} .kpi-summary,.analysis-section,.suggestions,.limit-box,[data-testid="stExpander"],[class*="st-key-viz_"]{margin-left:0;max-width:100%} }
-</style>
-""",
-        unsafe_allow_html=True,
-    )
+    """Load the presentation-only design system, independent of analysis state."""
+
+    stylesheet = Path(__file__).resolve().parent / "assets" / "datalume.css"
+    st.markdown(f"<style>{stylesheet.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
 
 def render_brand(logo_path: Path) -> None:
-    logo, word = st.columns([1, 4.4], vertical_alignment="center")
-    with logo:
-        st.image(str(logo_path), width=44)
-    with word:
-        st.markdown('<div class="brand-word">Datalume</div>', unsafe_allow_html=True)
+    with st.container(key="datalume_brand"):
+        logo, word = st.columns([1, 4.4], vertical_alignment="center")
+        with logo:
+            # A data URI preserves source pixels; local files are downsampled to
+            # the display width by Streamlit, making fine lines blur on Retina.
+            logo_uri = "data:image/png;base64," + b64encode(logo_path.read_bytes()).decode("ascii")
+            st.image(logo_uri, width=44)
+        with word:
+            st.markdown('<div class="brand-word">Datalume</div>', unsafe_allow_html=True)
 
 
 def render_workspace_header(name: str) -> None:
     st.markdown(
         f'<div class="workspace-head"><div class="workspace-title">'
-        f'<span class="database-glyph">≡</span>{escape(name)}</div></div>',
+        '<span class="database-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" '
+        'fill="none" stroke="currentColor" stroke-width="1.4">'
+        '<ellipse cx="12" cy="5" rx="8" ry="3"/>'
+        '<path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/>'
+        f'</svg></span><span class="workspace-name" title="{escape(name)}">'
+        f'{escape(name)}</span></div></div>',
         unsafe_allow_html=True,
     )
 
@@ -186,16 +111,77 @@ def render_user_message(content: str) -> None:
 
 def _inline_markdown(content: str) -> str:
     safe = escape(content)
-    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
 
 
 def _answer_html(content: str) -> str:
-    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", content) if part.strip()]
-    if not paragraphs:
-        return ""
-    return "".join(
-        f"<p>{_inline_markdown(part).replace(chr(10), '<br>')}</p>"
-        for part in paragraphs
+    blocks: list[str] = []
+    paragraph: list[str] = []
+    list_kind: str | None = None
+    list_items: list[str] = []
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            blocks.append("<p>" + "<br>".join(_inline_markdown(line) for line in paragraph) + "</p>")
+            paragraph.clear()
+
+    def flush_list() -> None:
+        nonlocal list_kind
+        if list_kind and list_items:
+            blocks.append(
+                f"<{list_kind}>"
+                + "".join(f"<li>{_inline_markdown(item)}</li>" for item in list_items)
+                + f"</{list_kind}>"
+            )
+        list_kind = None
+        list_items.clear()
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush_paragraph()
+            flush_list()
+            continue
+        heading = re.match(r"^#{1,3}\s+(.+)$", line)
+        unordered = re.match(r"^[-*]\s+(.+)$", line)
+        ordered = re.match(r"^\d+[.)]\s+(.+)$", line)
+        if heading:
+            flush_paragraph()
+            flush_list()
+            blocks.append(
+                f'<div class="answer-heading">{_inline_markdown(heading.group(1))}</div>'
+            )
+        elif unordered or ordered:
+            flush_paragraph()
+            kind = "ul" if unordered else "ol"
+            if list_kind and list_kind != kind:
+                flush_list()
+            list_kind = kind
+            list_items.append((unordered or ordered).group(1))
+        else:
+            flush_list()
+            paragraph.append(line)
+    flush_paragraph()
+    flush_list()
+    return "".join(blocks)
+
+
+def render_assistant_message(content: str) -> None:
+    """渲染不带 KPI、图表或分析区块的简洁 AI 文本消息。"""
+
+    st.markdown(
+        f'<div class="assistant-response"><span class="ai-label">✦</span>'
+        f'<div class="assistant-answer">{_answer_html(content)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _wants_visualization(user_goal: str | None) -> bool:
+    normalized = re.sub(r"\s+", "", user_goal or "")
+    return any(
+        keyword in normalized
+        for keyword in ("画图", "图表", "可视化", "趋势图", "对比图", "画出来")
     )
 
 
@@ -248,7 +234,7 @@ def _render_analysis_lines(title: str, items: Iterable[str]) -> None:
         return
     rows = "".join(
         f'<div class="analysis-line"><span class="analysis-dot">·</span>'
-        f'<span>{escape(item)}</span></div>' for item in values
+        f'<span>{_inline_markdown(item)}</span></div>' for item in values
     )
     st.markdown(
         f'<div class="analysis-section"><div class="analysis-section-title">'
@@ -301,11 +287,7 @@ def render_analysis(
     message_key: str = "analysis",
 ) -> None:
     display_answer = result.conclusion if fallback_used or not answer else answer
-    st.markdown(
-        f'<div class="assistant-response"><span class="ai-label">✦</span>'
-        f'<div class="assistant-answer">{_answer_html(display_answer)}</div></div>',
-        unsafe_allow_html=True,
-    )
+    render_assistant_message(display_answer)
     if fallback_used:
         st.markdown(
             '<div class="fallback-note">AI 理解服务暂时不可用，已切换至基础分析模式。</div>',
@@ -350,7 +332,7 @@ def render_analysis(
 
     entries = _analysis_entries(result, agent_response)
     if any(item.intent.value == "trend" and item.supported for _, item in entries):
-        render_kpi_summary(comparison_kpis(orders, capabilities)[:3])
+        render_kpi_summary(comparison_kpis(orders, capabilities))
 
     charts: dict[str, list] = {}
     if agent_response and agent_response.visualizations:
@@ -373,6 +355,21 @@ def render_analysis(
         if chart is not None:
             charts.setdefault(result.intent.value, []).append(chart)
 
+    if not charts and _wants_visualization(user_goal):
+        for name, analysis in entries:
+            metric = (
+                plan.metric
+                if plan is not None and analysis.intent == result.intent
+                else None
+            )
+            chart = build_visualization(
+                analysis.intent, orders, analysis, capabilities, metric=metric,
+                action="visualize", visualization=True,
+            )
+            if chart is not None:
+                charts.setdefault(name, []).append(chart)
+                break
+
     detailed = len(entries) > 1 or result.intent.value == "trend" or (
         plan is not None and plan.action in {"explain", "compare"}
     )
@@ -389,14 +386,17 @@ def render_analysis(
                 section_items.append(analysis.conclusion)
             section_items.extend(_novel_items(analysis.evidence, display_answer, 3))
             section_items.extend(_novel_items(analysis.reasons, display_answer, 2))
-            _render_analysis_lines(labels.get(name, "分析结果"), _unique_items(section_items))
+            _render_analysis_lines(
+                f"AI 诊断 · {labels.get(name, '分析结果')}",
+                _unique_items(section_items),
+            )
         for chart in charts.get(name, []):
             with st.container(border=True, key=f"viz_{message_key}_{chart_index}"):
                 st.markdown(
                     f'<div class="chart-title">{escape(_chart_title(analysis))}</div>',
                     unsafe_allow_html=True,
                 )
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, use_container_width=True, theme=None)
             chart_index += 1
 
     if _should_show_suggestions(result, plan, entries, user_goal):
@@ -408,7 +408,7 @@ def render_analysis(
         )
         if rows:
             st.markdown(
-                '<div class="suggestions"><div class="analysis-section-title">建议</div>'
+                '<div class="suggestions"><div class="analysis-section-title">建议优先关注</div>'
                 + rows + "</div>",
                 unsafe_allow_html=True,
             )

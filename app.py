@@ -17,6 +17,9 @@ from datalume.data_processor import (
     DataValidationError,
     calculate_metrics,
     detect_data_capabilities,
+    excel_sheet_names,
+    fingerprint_csv,
+    prepare_order_upload,
     process_order_csv,
     summarize_orders,
 )
@@ -38,13 +41,14 @@ from datalume.ui_components import (
     comparison_kpis,
     inject_global_styles,
     render_analysis,
+    render_assistant_message,
     render_brand,
     render_empty_state,
     render_kpi_cards,
     render_user_message,
     render_workspace_header,
 )
-from datalume.visualization import PALETTE
+from datalume.visualization import PALETTE, style_chart
 
 
 @st.cache_data(show_spinner=False)
@@ -78,6 +82,18 @@ def sync_chat_history_with_data_source(
     return True
 
 
+def _set_flash(message: str) -> None:
+    """在下一次 rerun 后显示一次轻量操作反馈。"""
+
+    st.session_state["ui_flash_message"] = message
+
+
+def _render_flash() -> None:
+    message = st.session_state.pop("ui_flash_message", None)
+    if message:
+        st.toast(message, icon=":material/check_circle:")
+
+
 def _render_database_item(project: DatabaseProject, active_id: str) -> None:
     name_col, pin_col = st.columns([5.5, 1], vertical_alignment="center")
     with name_col:
@@ -92,13 +108,37 @@ def _render_database_item(project: DatabaseProject, active_id: str) -> None:
             st.rerun()
     with pin_col:
         if st.button(
-            " ",
+            "取消置顶" if project.pinned else "置顶",
             icon=":material/push_pin:" if project.pinned else ":material/keep_off:",
             key=f"pin_{project.database_id}",
             help="取消置顶" if project.pinned else "置顶",
         ):
             toggle_database_pin(st.session_state, project.database_id)
             st.rerun()
+
+
+def _prepare_uploaded_orders(uploaded, *, key_prefix: str) -> bytes | None:
+    """Render only the sheet selector; validation lives in data_processor."""
+
+    if uploaded is None:
+        return None
+    content = uploaded.getvalue()
+    filename = uploaded.name
+    sheet_name = None
+    try:
+        if Path(filename).suffix.lower() in {".xlsx", ".xls"}:
+            sheets = excel_sheet_names(content, filename=filename)
+            if len(sheets) > 1:
+                sheet_name = st.selectbox(
+                    "选择工作表", sheets,
+                    key=f"{key_prefix}_sheet_{fingerprint_csv(content)}",
+                )
+            else:
+                sheet_name = sheets[0]
+        return prepare_order_upload(content, filename=filename, sheet_name=sheet_name)
+    except DataValidationError as error:
+        st.error(str(error))
+        return None
 
 
 @st.dialog("新建数据库", width="small")
@@ -109,21 +149,26 @@ def _create_database_dialog() -> None:
         key="create_database_name",
     )
     uploaded = st.file_uploader(
-        "上传订单 CSV",
-        type=["csv"],
+        "上传订单 CSV 或 Excel",
+        type=["csv", "xlsx", "xls"],
         key="create_database_csv",
     )
+    content = _prepare_uploaded_orders(uploaded, key_prefix="create_order")
     if st.button("创建数据库", type="primary", use_container_width=True):
-        if not name.strip() or uploaded is None:
-            st.error("请填写数据库名称并上传 CSV。")
+        cleaned_name = name.strip()
+        if not cleaned_name or uploaded is None:
+            st.error("请填写数据库名称并上传 CSV 或 Excel。")
             return
-        content = uploaded.getvalue()
-        try:
-            process_order_csv(content)
-        except DataValidationError as error:
-            st.error(str(error))
+        if any(
+            project.name.casefold() == cleaned_name.casefold()
+            for project in st.session_state.get("databases", {}).values()
+        ):
+            st.error("数据库名称已存在，请换一个名称。")
             return
-        create_database(st.session_state, name, content)
+        if content is None:
+            return
+        create_database(st.session_state, cleaned_name, content)
+        _set_flash(f"已创建数据库“{cleaned_name}”。")
         st.session_state["show_create_database"] = False
         del st.session_state["create_database_name"]
         del st.session_state["create_database_csv"]
@@ -152,6 +197,7 @@ def _rename_database_dialog(project: DatabaseProject) -> None:
         use_container_width=True,
     ):
         st.session_state["show_rename_database_id"] = None
+        st.session_state.pop(input_key, None)
         st.rerun()
     if save_col.button(
         "保存", key=f"save_rename_{project.database_id}", type="primary",
@@ -162,7 +208,9 @@ def _rename_database_dialog(project: DatabaseProject) -> None:
         except ValueError as error:
             st.error(str(error))
         else:
+            _set_flash(f"数据库已重命名为“{project.name}”。")
             st.session_state["show_rename_database_id"] = None
+            st.session_state.pop(input_key, None)
             st.rerun()
 
 
@@ -185,7 +233,9 @@ def _delete_database_dialog(project: DatabaseProject) -> None:
         use_container_width=True,
     ):
         database_id = project.database_id
+        project_name = project.name
         delete_database(st.session_state, database_id)
+        _set_flash(f"已删除数据库“{project_name}”。")
         st.session_state["show_delete_database_id"] = None
         st.session_state["show_rename_database_id"] = None
         st.session_state.pop(f"rename_database_name_{database_id}", None)
@@ -231,24 +281,27 @@ def _render_database_groups() -> None:
 
 def render_sidebar(logo_path: Path) -> None:
     with st.sidebar:
-        render_brand(logo_path)
-        _render_create_database()
-        query = st.text_input("搜索数据库", placeholder="搜索数据库", label_visibility="collapsed")
-        projects = search_databases(st.session_state, query)
-        pinned = [project for project in projects if project.pinned]
-        others = [project for project in projects if not project.pinned]
-        st.markdown('<div class="sidebar-section">置顶</div>', unsafe_allow_html=True)
-        for project in pinned:
-            _render_database_item(project, st.session_state["active_database_id"])
-        st.markdown('<div class="sidebar-section">全部数据库</div>', unsafe_allow_html=True)
-        for project in others:
-            _render_database_item(project, st.session_state["active_database_id"])
-        _render_database_groups()
-        st.markdown(
-            '<div class="sidebar-footer"><span class="user-avatar">L</span>'
-            '<span>当前用户</span><span class="settings-glyph">⚙</span></div>',
-            unsafe_allow_html=True,
-        )
+        with st.container(key="sidebar_navigation"):
+            render_brand(logo_path)
+            _render_create_database()
+            query = st.text_input("搜索数据库", placeholder="搜索数据库", label_visibility="collapsed")
+            projects = search_databases(st.session_state, query)
+            pinned = [project for project in projects if project.pinned]
+            others = [project for project in projects if not project.pinned]
+            st.markdown('<div class="sidebar-section">置顶</div>', unsafe_allow_html=True)
+            for project in pinned:
+                _render_database_item(project, st.session_state["active_database_id"])
+            st.markdown('<div class="sidebar-section">全部数据库</div>', unsafe_allow_html=True)
+            for project in others:
+                _render_database_item(project, st.session_state["active_database_id"])
+            if query.strip() and not projects:
+                st.caption("没有匹配的数据库")
+            _render_database_groups()
+            st.markdown(
+                '<div class="sidebar-footer"><span class="user-avatar">L</span>'
+                '<span>当前用户</span><span class="settings-glyph">⚙</span></div>',
+                unsafe_allow_html=True,
+            )
 
 
 def _render_data_management(project: DatabaseProject, overview, quality, capabilities) -> None:
@@ -262,18 +315,23 @@ def _render_data_management(project: DatabaseProject, overview, quality, capabil
     for warning in quality.warnings:
         st.caption(warning)
     replacement = st.file_uploader(
-        "替换当前数据库 CSV",
-        type=["csv"],
+        "替换当前数据库 CSV 或 Excel",
+        type=["csv", "xlsx", "xls"],
         key=f"replace_{project.database_id}",
     )
     if replacement is not None:
-        try:
-            process_order_csv(replacement.getvalue())
-        except DataValidationError as error:
-            st.error(str(error))
-        else:
-            if st.button("确认切换数据源", key=f"confirm_replace_{project.database_id}"):
-                if replace_database_data(project, replacement.getvalue()):
+        st.warning("替换数据后，当前数据库的聊天记录、Agent 上下文和报告将被清空。")
+        content = _prepare_uploaded_orders(
+            replacement, key_prefix=f"replace_order_{project.database_id}"
+        )
+        if content is not None:
+            if st.button(
+                "确认替换数据",
+                key=f"confirm_replace_{project.database_id}",
+                use_container_width=True,
+            ):
+                if replace_database_data(project, content):
+                    _set_flash("数据源已更新，旧对话与报告已清空。")
                     st.rerun()
                 else:
                     st.info("上传文件与当前数据源相同。")
@@ -293,7 +351,7 @@ def _render_dashboard(orders, metrics, capabilities) -> None:
             y=alt.Y("product:N", sort="-x", title=None),
             tooltip=["product", "销售额"],
         ).properties(height=245)
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(style_chart(chart, height=245), use_container_width=True, theme=None)
         st.dataframe(
             frame.rename(columns={"product": "商品"}),
             use_container_width=True,
@@ -301,12 +359,12 @@ def _render_dashboard(orders, metrics, capabilities) -> None:
         )
     with trend_tab:
         frame = metrics.daily_sales.rename("销售额").reset_index()
-        chart = alt.Chart(frame).mark_line(point=True, color=PALETTE[3]).encode(
+        chart = alt.Chart(frame).mark_line(point=True, color=PALETTE[4]).encode(
             x=alt.X("date:T", title=None),
             y=alt.Y("销售额:Q", title=None),
             tooltip=["date:T", "销售额:Q"],
         ).properties(height=245)
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(style_chart(chart, height=245), use_container_width=True, theme=None)
     with profile_tab:
         left, right = st.columns(2)
         left.markdown("**性别用户数**")
@@ -345,53 +403,55 @@ def _report_dialog(project: DatabaseProject) -> None:
 
 
 def _render_workspace_toolbar(project, orders, quality, overview, metrics, capabilities) -> None:
-    title_col, menu_col = st.columns([12, 2], vertical_alignment="center")
-    with title_col:
-        render_workspace_header(project.name)
-    with menu_col:
-        with st.popover(
-            "更多", icon=":material/more_horiz:", help="数据库操作",
-            use_container_width=True,
-        ):
-            st.markdown("**数据库**")
-            if st.button(
-                "重命名", icon=":material/edit:", key=f"rename_{project.database_id}",
+    with st.container(key="workspace_toolbar"):
+        title_col, menu_col = st.columns([12, 2], vertical_alignment="center")
+        with title_col:
+            render_workspace_header(project.name)
+        with menu_col:
+            with st.popover(
+                "更多", icon=":material/more_horiz:", help="数据库操作",
                 use_container_width=True,
             ):
-                st.session_state["show_delete_database_id"] = None
-                st.session_state["show_rename_database_id"] = project.database_id
-            if st.button(
-                "删除数据库", icon=":material/delete:", key=f"delete_{project.database_id}",
-                use_container_width=True,
-            ):
-                st.session_state["show_rename_database_id"] = None
-                st.session_state["show_delete_database_id"] = project.database_id
-            st.divider()
-            _render_data_management(project, overview, quality, capabilities)
-            st.divider()
-            if st.button(
-                "查看经营分析",
-                icon=":material/monitoring:",
-                use_container_width=True,
-            ):
-                _dashboard_dialog(orders, metrics, capabilities)
-            if st.button(
-                "生成 AI 经营诊断报告",
-                icon=":material/description:",
-                use_container_width=True,
-            ):
-                project.diagnostic_report = generate_diagnostic_report(
-                    orders, metrics, overview, capabilities
-                )
-                project.diagnostic_report_source_id = project.data_source_id
-                _report_dialog(project)
-            elif project.diagnostic_report is not None:
+                st.markdown("**数据库**")
                 if st.button(
-                    "查看已有报告",
-                    icon=":material/article:",
+                    "重命名", icon=":material/edit:", key=f"rename_{project.database_id}",
                     use_container_width=True,
                 ):
+                    st.session_state["show_delete_database_id"] = None
+                    st.session_state["show_rename_database_id"] = project.database_id
+                if st.button(
+                    "删除数据库", icon=":material/delete:", key=f"delete_{project.database_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state["show_rename_database_id"] = None
+                    st.session_state["show_delete_database_id"] = project.database_id
+                st.divider()
+                _render_data_management(project, overview, quality, capabilities)
+                st.divider()
+                if st.button(
+                    "查看经营分析",
+                    icon=":material/monitoring:",
+                    use_container_width=True,
+                ):
+                    _dashboard_dialog(orders, metrics, capabilities)
+                if st.button(
+                    "生成 AI 经营诊断报告",
+                    icon=":material/description:",
+                    use_container_width=True,
+                ):
+                    with st.spinner("正在生成经营诊断报告…"):
+                        project.diagnostic_report = generate_diagnostic_report(
+                            orders, metrics, overview, capabilities
+                        )
+                    project.diagnostic_report_source_id = project.data_source_id
                     _report_dialog(project)
+                elif project.diagnostic_report is not None:
+                    if st.button(
+                        "查看已有报告",
+                        icon=":material/article:",
+                        use_container_width=True,
+                    ):
+                        _report_dialog(project)
     if st.session_state.get("show_rename_database_id") == project.database_id:
         _rename_database_dialog(project)
     if st.session_state.get("show_delete_database_id") == project.database_id:
@@ -403,6 +463,7 @@ def _answer_prompt(
     prompt: str, project: DatabaseProject, orders, overview, metrics, capabilities
 ) -> None:
     project.chat_messages.append({"role": "user", "content": prompt})
+    render_user_message(prompt)
     with st.spinner("正在分析数据…"):
         response = run_agent(
             prompt,
@@ -422,6 +483,7 @@ def _answer_prompt(
     project.chat_messages.append(
         {
             "role": "assistant",
+            "kind": "clarification" if response.needs_clarification else "analysis",
             "content": response.answer,
             "result": response.primary_result,
             "plan": response.plan,
@@ -461,6 +523,7 @@ def main() -> None:
     st.session_state.setdefault("show_rename_database_id", None)
     st.session_state.setdefault("show_delete_database_id", None)
     render_sidebar(logo_path)
+    _render_flash()
     project = get_active_database(st.session_state)
     if project is None:
         return
@@ -476,20 +539,23 @@ def main() -> None:
     if not project.chat_messages:
         render_empty_state()
         st.markdown("**你可以这样问**")
-        quick_cols = st.columns(3)
-        quick_questions = _quick_questions(orders, capabilities)
-        for index, question in enumerate(quick_questions):
-            if quick_cols[index].button(
-                question,
-                key=f"quick_{project.database_id}_{index}",
-                use_container_width=True,
-            ):
-                _answer_prompt(question, project, orders, overview, metrics, capabilities)
-                st.rerun()
+        with st.container(key="quick_questions"):
+            quick_cols = st.columns(3)
+            quick_questions = _quick_questions(orders, capabilities)
+            for index, question in enumerate(quick_questions):
+                if quick_cols[index].button(
+                    question,
+                    key=f"quick_{project.database_id}_{index}",
+                    use_container_width=True,
+                ):
+                    _answer_prompt(question, project, orders, overview, metrics, capabilities)
+                    st.rerun()
     else:
         for message_index, message in enumerate(project.chat_messages):
             if message["role"] == "user":
                 render_user_message(message["content"])
+            elif message.get("kind") == "clarification":
+                render_assistant_message(message["content"])
             else:
                 render_analysis(
                     message["result"],

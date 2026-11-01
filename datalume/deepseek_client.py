@@ -7,12 +7,13 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import time
 from typing import Any, Mapping, Sequence
 
 from dotenv import load_dotenv
 
-from .agent_models import AgentModelTurn, AgentToolCall
+from .agent_models import AgentModelTurn, AgentRequestDecision, AgentToolCall
 from .analysis_engine import AnalysisResult
 from .data_processor import DataCapabilities
 
@@ -281,7 +282,9 @@ class DeepSeekClient:
         }
         system = """你是 Datalume Agent 的 Skill 选择器。只输出 JSON，不回答业务问题。
 根据 user_goal 和 available_skills 的 name/description 判断是否需要一个 Skill。
-只有复杂诊断、原因定位或异常调查才选专业 Skill；能由单个分析工具回答的指标查询、排名或画图应返回 null。
+复杂诊断、原因定位或异常调查选择 business-diagnosis。
+需要确定或解释经营指标口径（如“最好”“高价值”、收入与利润的区别）时可选 business-metrics。
+口径明确的普通指标查询、排名或画图返回 null；不因问题出现一个指标词就加载 Skill。
 不得仅因为问题出现“销售”就选择 Skill。
 输出格式：{"skill": "skill-name"} 或 {"skill": null}。"""
         payload = {
@@ -311,6 +314,118 @@ class DeepSeekClient:
         if normalized not in allowed:
             raise DeepSeekError("DeepSeek 选择了未知 Skill。")
         return normalized
+
+    def plan_request(
+        self,
+        question: str,
+        *,
+        skills: Sequence[Mapping[str, str]],
+        clarification_instructions: str,
+        conversation_context: Mapping[str, Any] | None,
+        capabilities: DataCapabilities | None,
+        available_fields: Sequence[str] = (),
+        available_tools: Sequence[Mapping[str, str]] = (),
+        metrics_instructions: str = "",
+    ) -> AgentRequestDecision:
+        """一次决策完成关键歧义判断和业务 Skill 选择，避免额外模型往返。"""
+
+        allowed_skills = {
+            str(item.get("name", "")).strip()
+            for item in skills if str(item.get("name", "")).strip()
+        }
+        system = """你是 Datalume Agent 的请求规划器。只输出 JSON，不回答业务数据问题。
+你要同时判断用户请求是否存在必须先确认的关键歧义，以及继续执行时是否需要一个业务 Skill。
+
+决策原则：
+- 能从当前问题或 conversation_context 可靠推断时，action=continue。
+- 一个现有分析工具能综合返回相关核心指标时，通常 action=continue；只有用户要求单一取舍、不同标准会改变选择时才确认口径。
+- 数据缺少成本、渠道等必要字段时，action=continue，让对应分析工具明确说明限制。
+- 只有对象、指标、时间范围、比较基准或指代对象存在多个合理解释，并会显著改变分析路径或结论时，action=clarify。
+- 若 pending_clarification 存在：当前回复是在补充旧问题时，将两者合并到 resolved_question；当前消息是清晰的新问题时，以新问题为准。
+- 若不存在 pending_clarification，resolved_question 必须保持 user_goal 原意，不得增加用户未提供的对象、范围或口径。
+- clarify 时一次只问一个最关键的问题，可提供不超过三个简短选项。
+- skill 只能从 available_skills 中选择；复杂原因诊断优先 business-diagnosis，需要选择或解释指标口径时可选 business-metrics；口径明确的普通查询、排名或画图返回 null。
+- “哪个商品/渠道表现最好”通常直接说明标准并综合已有指标；用户要做单一取舍且标准会改变决定时，才通过已有澄清流程确认标准。
+- 当前用户明确的标准高于历史口径。数据缺字段、工具无法执行的筛选或时间范围属于能力限制，不用重复澄清。
+
+输出字段：action, resolved_question, skill, ambiguity_type, clarification_question, options, reason, uses_pending。
+action 只能是 continue 或 clarify。ambiguity_type 只能是 object、metric、time_range、comparison、referent、scope、other。
+clarify 时 options 只写简短候选口径，不写业务结论；continue 时 resolved_question 必须是可直接执行的完整问题。
+只有当前回复确实是在补充 pending_clarification 时，uses_pending 才为 true。
+
+# Clarification Skill
+""" + clarification_instructions
+        if metrics_instructions:
+            system += "\n\n# Business Metrics Skill：请求口径规则\n" + metrics_instructions
+        payload = {
+            "user_goal": question,
+            "available_skills": list(skills),
+            "conversation_context": _compact(conversation_context or {}),
+            "data_capabilities": capability_payload(capabilities),
+            "available_fields": list(available_fields),
+            "available_tools": list(available_tools),
+        }
+        content = self._completion(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            json_output=True,
+            max_tokens=420,
+        )
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError as error:
+            raise DeepSeekError("DeepSeek 请求规划 JSON 无法解析。") from error
+        if not isinstance(result, Mapping):
+            raise DeepSeekError("DeepSeek 请求规划 JSON 不是对象。")
+
+        action = str(result.get("action", "")).strip().lower()
+        if action not in {"continue", "clarify"}:
+            raise DeepSeekError("DeepSeek 返回了不支持的请求动作。")
+        selected = result.get("skill")
+        skill = None if selected in (None, "", "null") else str(selected).strip()
+        if skill is not None and skill not in allowed_skills:
+            raise DeepSeekError("DeepSeek 选择了未知 Skill。")
+        resolved = str(result.get("resolved_question") or "").strip()
+        clarification = str(result.get("clarification_question") or "").strip() or None
+        ambiguity_type = str(result.get("ambiguity_type") or "other").strip().lower()
+        if ambiguity_type not in {
+            "object", "metric", "time_range", "comparison", "referent", "scope", "other"
+        }:
+            ambiguity_type = "other"
+        raw_options = result.get("options") or []
+        if not isinstance(raw_options, Sequence) or isinstance(raw_options, (str, bytes)):
+            raw_options = []
+        options_list = []
+        unsafe_option = re.compile(
+            r"[\n\r。；]|[%￥¥$]|\d[\d,.]*\s*(?:元|件|单|人|次|%)|"
+            r"(?:是|为|达到|下降|上涨|增长|减少|增加|贡献)"
+        )
+        for item in raw_options:
+            option = str(item).strip()
+            if not option or len(option) > 40 or unsafe_option.search(option):
+                continue
+            options_list.append(option)
+        options = tuple(dict.fromkeys(options_list))[:3]
+        reason = str(result.get("reason") or "").strip() or None
+        if action == "clarify":
+            skill = None
+        elif not resolved:
+            resolved = question.strip()
+        return AgentRequestDecision(
+            action=action,
+            resolved_question=resolved,
+            skill=skill,
+            clarification_question=clarification,
+            options=options,
+            reason=reason,
+            ambiguity_type=ambiguity_type,
+            uses_pending=(
+                result.get("uses_pending") is True
+                or str(result.get("uses_pending", "")).strip().lower() == "true"
+            ),
+        )
 
     def parse_intent(
         self,

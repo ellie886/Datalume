@@ -53,7 +53,7 @@ flowchart TD
 
 ### Python / Pandas 负责
 
-- CSV 数据校验与清洗
+- CSV / Excel 数据导入、校验与清洗
 - 核心指标计算
 - 分组聚合分析
 - 周期比较
@@ -95,6 +95,8 @@ analyze_trend
 
 ## Agent / Skill / Tool
 
+此外，`business-metrics` 负责经营指标口径：将“表现最好”“高价值”等表达对应到当前工具支持的指标，区分销量、销售额、利润和毛利率，并说明复购分母、时间范围及字段限制。普通问题可直接比较已有指标；只有口径会改变用户的单一取舍时，才复用 `clarify-analysis-request` 简短确认，用户补充后恢复原问题。该 Skill 不增加计算工具或模型请求轮次。
+
 - **Agent**：决定现在应该做什么。例如先检查销售趋势，再根据订单量变化继续分析渠道。
 - **Skill**：定义一类任务应遵循的专业方法。例如经营诊断要求先确认现象，再拆解指标和验证假设。
 - **Tool**：执行具体、可审计的数据动作。例如计算商品排名、渠道销售额或最近两周趋势。
@@ -122,8 +124,8 @@ Registry 不提供 Shell、任意 Python、文件删除或通用 HTTP 请求工�
 `SkillLoader` 采用 metadata-first 发现机制：
 
 1. 默认只读取每个 Skill 的 `name` 和 `description`。
-2. Skill Selector 判断当前任务是否需要专业 Skill。
-3. 只有被选中的 Skill 才会加载完整 `SKILL.md` 并进入 Agent Prompt。
+2. 请求规划阶段读取两个短策略（`clarify-analysis-request` 与 `business-metrics`），在同一次模型请求中判断关键歧义、指标口径和业务 Skill 选择。
+3. 主分析循环只注入选中的业务 Skill 正文：需要明确口径时使用 `business-metrics`，复杂变化原因诊断使用 `business-diagnosis`；明确指标查询可以不加载业务 Skill。
 
 这样可以减少无关说明进入上下文，并为后续增加更多 Skills 保留清晰的扩展边界。项目目前没有对 token 或成本节省做量化声明。
 
@@ -178,15 +180,19 @@ Datalume/
 │   ├── skill_loader.py            # Skill metadata 发现与按需加载
 │   ├── router.py                  # 确定性意图识别回退
 │   ├── analysis_engine.py         # 七类真实业务分析
-│   ├── data_processor.py          # CSV 校验、清洗、指标与能力检测
+│   ├── data_processor.py          # CSV/Excel 导入、清洗、指标与能力检测
 │   ├── database_manager.py        # 多数据库状态隔离与管理
 │   ├── report_generator.py        # 经营诊断报告与 Markdown 内容
 │   ├── ui_components.py           # Datalume UI 组件
 │   ├── visualization.py           # 动态 Altair 图表
 │   └── assets/                    # 产品品牌资产
 ├── skills/
-│   └── business-diagnosis/
-│       └── SKILL.md               # 经营诊断方法与边界
+│   ├── business-diagnosis/
+│   │   └── SKILL.md               # 经营诊断方法与边界
+│   ├── business-metrics/
+│   │   └── SKILL.md               # 经营指标口径与真实工具限制
+│   └── clarify-analysis-request/
+│       └── SKILL.md               # 关键歧义澄清与任务恢复
 ├── data/
 │   ├── demo_orders.csv            # 完整 Agent Demo 经营数据
 │   └── orders.csv                 # 最小回归测试样例
@@ -216,7 +222,9 @@ cp .env.example .env
 
 不要提交真实 API Key。没有配置 Key 时，应用仍可启动，并会回退到确定性的基础分析模式；多步 LLM Agent 与自然语言生成需要可用的 DeepSeek API。
 
-启动后可创建数据库并上传 `data/demo_orders.csv` 体验完整的商品、用户、渠道、复购、利润与趋势分析。
+启动后可创建数据库，上传 CSV 或 Excel（`.xlsx` / `.xls`）。多工作表文件会显示“选择工作表”，每次导入一张表，首行需包含现有订单字段。可用 `data/demo_orders.csv` 体验完整的商品、用户、渠道、复购、利润与趋势分析。
+
+Excel 选中的工作表在内存中转换为 CSV，再进入相同的校验、分析和会话隔离流程；不保存原始工作簿、不执行 Excel 公式，也不自动合并工作表。替换当前数据源同样支持 Excel，确认替换后才清空旧对话与报告。
 
 启动应用：
 
@@ -231,13 +239,14 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-当前版本已通过 **99 automated tests**，覆盖：
+自动化测试覆盖：
 
-- CSV 校验、清洗和 DataCapabilities
+- CSV / Excel 导入、工作表选择、校验、清洗和 DataCapabilities
 - 七类业务分析与数据不足拒答
 - OpenAI-compatible Tool Calling 与 Tool whitelist
 - 多步 Observation-driven Agent Loop 与停止条件
 - Business Diagnosis Skill 选择、加载、假设验证和失败回退
+- 经营指标口径 Skill 接入、关键歧义澄清、补充恢复及选择失败回退
 - 多数据库创建、搜索、置顶、切换、重命名、删除及状态隔离
 - 动态可视化、报告生成与 Streamlit AppTest
 
@@ -245,10 +254,12 @@ python -m pytest -q
 
 ## Known Limitations
 
-- 当前只有一个正式 Skill：`business-diagnosis`。
-- 每轮最多选择一个 Skill；Skill Selection 在 LLM 可用时会增加一次模型请求。
+- 当前有经营诊断、经营指标口径和请求澄清三个 Skill；请求规划后，主分析循环每轮最多加载一个业务 Skill。
+- LLM 可用时先执行一次请求规划；澄清判断、指标口径和业务 Skill 选择共用该请求。
+- Skill 提供分析方法，不扩展工具能力。当前任意日期/人群筛选、部分指标重排尚未实现；参数被接受不代表实际计算已应用，回答需要保留真实口径限制。
 - 多数据库状态保存在 `st.session_state`，应用重启后不会持久化。
-- 诊断深度受当前 Tool Observation 粒度和 CSV 可用字段限制。
+- 诊断深度受当前 Tool Observation 粒度和当前数据可用字段限制。
+- Excel 每次分析一张工作表；不支持跨表 Join、合并单元格/多行表头自动整理或公式重算。公式单元格需要文件中已有有效缓存值，否则按缺失数据提示。
 - 缺少促销、优惠券、实际支付等字段时，无法继续验证部分客单价变化原因。
 - 复购可靠性依赖完整订单标识；渠道 CAC / ROI 依赖渠道与获客成本字段。
 - 当前诊断属于描述性分析和基于同期证据的判断，不等同于统计因果推断。

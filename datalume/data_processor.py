@@ -1,10 +1,10 @@
-"""订单 CSV 读取、清洗、指标计算与可选字段能力检测。"""
+"""CSV/Excel 导入、清洗、指标计算与可选字段能力检测。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -168,8 +168,22 @@ def detect_data_capabilities(orders: pd.DataFrame) -> DataCapabilities:
 
 def _read_csv(source: str | Path | bytes | BinaryIO) -> pd.DataFrame:
     readable = BytesIO(source) if isinstance(source, bytes) else source
+    if hasattr(readable, "read"):
+        payload = readable.read()
+        readable = StringIO(payload) if isinstance(payload, str) else BytesIO(payload)
     try:
-        return pd.read_csv(readable)
+        # IDs are labels, even when all their characters happen to be digits.
+        # Inspect original header spelling so case/whitespace aliases also retain
+        # leading zeros and long identifiers when an Excel sheet becomes CSV.
+        header = pd.read_csv(readable, nrows=0)
+        identifiers = {"user_id", *OPTIONAL_FIELD_ALIASES["order_id"]}
+        text_ids = {
+            column: "string" for column in header.columns
+            if str(column).strip().lower() in identifiers
+        }
+        if hasattr(readable, "seek"):
+            readable.seek(0)
+        return pd.read_csv(readable, dtype=text_ids)
     except EmptyDataError as error:
         raise DataValidationError("CSV 文件为空或不包含表头。") from error
     except UnicodeDecodeError as error:
@@ -229,6 +243,79 @@ def process_order_csv(source: str | Path | bytes | BinaryIO) -> tuple[pd.DataFra
     if duplicates_removed:
         warnings.append(f"检测到并移除 {duplicates_removed} 行完全重复数据。")
     return orders, DataQualityReport(original_rows, len(orders), empty_removed, duplicates_removed, tuple(warnings))
+
+
+def _excel_workbook(content: bytes, *, filename: str) -> pd.ExcelFile:
+    """Open a workbook in memory; the caller owns and closes the handle."""
+
+    suffix = Path(filename).suffix.lower()
+    engines = {".xlsx": "openpyxl", ".xls": "xlrd"}
+    if suffix not in engines:
+        raise DataValidationError("请选择 Excel 文件（.xlsx 或 .xls）。")
+    try:
+        return pd.ExcelFile(BytesIO(content), engine=engines[suffix])
+    except ImportError as error:
+        raise DataValidationError(
+            f"Excel 读取组件 {engines[suffix]} 不可用，请安装 requirements.txt 中的依赖。"
+        ) from error
+    except Exception as error:
+        raise DataValidationError(
+            "Excel 文件无法读取，请确认文件未损坏、未加密，并重新保存后上传。"
+        ) from error
+
+
+def excel_sheet_names(content: bytes, *, filename: str) -> tuple[str, ...]:
+    """Inspect sheet names without combining tables or writing uploaded files."""
+
+    with _excel_workbook(content, filename=filename) as workbook:
+        names = tuple(workbook.sheet_names)
+    if not names:
+        raise DataValidationError("Excel 中没有可读取的工作表。")
+    return names
+
+
+def prepare_order_upload(
+    content: bytes, *, filename: str, sheet_name: str | None = None
+) -> bytes:
+    """Validate CSV or one Excel sheet and return the existing CSV input contract.
+
+    Keep raw worksheet rows so downstream quality reports still count duplicate
+    and blank rows. Workbook formatting/formulas are not executed or persisted.
+    """
+
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".csv":
+        process_order_csv(content)
+        return content
+    if suffix not in {".xlsx", ".xls"}:
+        raise DataValidationError("目前支持 CSV、Excel .xlsx 和 .xls 文件。")
+    selected = sheet_name
+    try:
+        with _excel_workbook(content, filename=filename) as workbook:
+            if not workbook.sheet_names:
+                raise DataValidationError("Excel 中没有可读取的工作表。")
+            if selected is None:
+                selected = workbook.sheet_names[0]
+            if selected not in workbook.sheet_names:
+                raise DataValidationError(f"Excel 中找不到工作表“{selected}”。")
+            # object keeps text identifiers as stored, rather than coercing them
+            # into numbers. Native date cells remain real date/time values.
+            frame = workbook.parse(sheet_name=selected, dtype=object)
+    except DataValidationError:
+        raise
+    except Exception as error:
+        raise DataValidationError(
+            "Excel 工作表无法读取，请确认文件未损坏、未加密，并重新保存后上传。"
+        ) from error
+    normalized = frame.to_csv(index=False, lineterminator="\n").encode("utf-8")
+    try:
+        process_order_csv(normalized)
+    except DataValidationError as error:
+        message = str(error).replace("CSV", "表格")
+        raise DataValidationError(
+            f"工作表“{selected}”：{message}", missing_fields=error.missing_fields
+        ) from error
+    return normalized
 
 
 def load_order_data(path: str | Path = DEFAULT_DATA_PATH) -> pd.DataFrame:

@@ -1,0 +1,8 @@
+# Shared dark defaults for native widgets, tables and portal surfaces.
+[theme]
+base = "dark"
+primaryColor = "#E3A3BD"
+backgroundColor = "#09090C"
+secondaryBackgroundColor = "#1B1B20"
+textColor = "#EEEEF2"
+font = "sans serif"

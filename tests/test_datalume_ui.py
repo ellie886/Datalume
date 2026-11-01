@@ -10,6 +10,7 @@ from datalume.deepseek_client import IntentPlan
 from datalume.ui_components import (
     _answer_html,
     _meaningful_diagnoses,
+    _wants_visualization,
     _should_show_suggestions,
     _visible_limitations,
 )
@@ -227,6 +228,23 @@ def test_answer_html_keeps_natural_language_in_one_text_flow():
     assert rendered.count("<p>") == 2
     assert "st.columns" not in rendered
     assert "最近一周销售额下降" in rendered
+
+
+def test_answer_html_renders_safe_headings_lists_and_inline_code():
+    rendered = _answer_html(
+        "## 结论\n\n- **订单量**下降\n- 检查 `channel` 字段\n\n1. 优先分析渠道"
+    )
+    assert 'class="answer-heading"' in rendered
+    assert "<ul>" in rendered and rendered.count("<li>") == 3
+    assert "<strong>订单量</strong>" in rendered
+    assert "<code>channel</code>" in rendered
+    assert "<script" not in _answer_html("<script>alert(1)</script>")
+
+
+def test_visualization_request_detection_is_explicit():
+    assert _wants_visualization("帮我画一张趋势图")
+    assert _wants_visualization("把销量可视化")
+    assert not _wants_visualization("哪个商品销量最高？")
 
 
 def test_suggestions_are_only_shown_for_recommendation_context(default_bundle):

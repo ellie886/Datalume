@@ -13,6 +13,12 @@ from datalume.router import QuestionType
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
 
+def _vega_charts(app):
+    """兼容 Streamlit AppTest 新旧 Vega-Lite 元素名称。"""
+
+    return app.get("vega_lite_chart") or app.get("arrow_vega_lite_chart")
+
+
 def test_streamlit_initial_view_runs():
     app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
     assert not app.exception
@@ -58,14 +64,14 @@ def test_streamlit_chat_chart_and_report_download():
     next(button for button in app.button if button.label == "哪个商品销量最高？").click()
     app.run()
     assert not app.exception
-    assert not app.get("arrow_vega_lite_chart")
+    assert not _vega_charts(app)
     assert any("基础分析模式" in item.value for item in app.markdown)
     assert not any("AI 诊断" in item.value for item in app.markdown)
     assert not any("建议优先关注" in item.value for item in app.markdown)
 
     app.chat_input[0].set_value("哪个商品销量最高？帮我画出来。").run()
     assert not app.exception
-    assert app.get("arrow_vega_lite_chart")
+    assert _vega_charts(app)
     next(button for button in app.button if button.label == "生成 AI 经营诊断报告").click()
     app.run()
     assert not app.exception
@@ -217,12 +223,72 @@ def test_complex_multi_dimension_answer_uses_dynamic_single_column_layout(rich_c
     assert not app.exception
     html = "\n".join(item.value for item in app.markdown)
     assert "assistant-answer" in html
-    assert "kpi-summary" in html
+    kpi_markup = next(
+        item.value for item in app.markdown
+        if '<div class="kpi-summary">' in item.value
+    )
+    assert kpi_markup.count('class="kpi-summary-item"') == 4
     assert "销售趋势" in html and "商品表现" in html and "渠道表现" in html
-    assert "AI 诊断" not in html and "建议优先关注" not in html
+    assert "AI 诊断 · 销售趋势" in html
+    assert "建议优先关注" not in html
     assert len(app.expander) == 1
     assert any("使用经营诊断 Skill" in item.value for item in app.markdown)
-    assert app.get("arrow_vega_lite_chart")
+    assert _vega_charts(app)
+
+
+def test_explicit_chart_request_renders_even_without_agent_visualization_spec(rich_csv):
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    project = create_database(app.session_state, "图表兑现", rich_csv)
+    orders, _ = process_order_csv(rich_csv)
+    metrics = calculate_metrics(orders)
+    caps = detect_data_capabilities(orders)
+    product = run_analysis(QuestionType.PRODUCT, "哪个商品销量最高？", orders, metrics, caps)
+    response = AgentResponse(
+        answer="已完成商品销量分析。",
+        steps=(AgentStep(1, "analyze_product", {}, product.conclusion, True, 1),),
+        visualizations=(),
+        fallback_used=False,
+        fallback_level="agent",
+        stop_reason="final_answer",
+        primary_result=product,
+        plan=IntentPlan("product", "quantity", "analyze", False),
+        analysis_results=(("product", product),),
+    )
+    project.chat_messages.extend((
+        {"role": "user", "content": "哪个商品销量最高？帮我画出来。"},
+        {
+            "role": "assistant", "content": response.answer, "result": product,
+            "plan": response.plan, "agent_response": response,
+            "user_goal": "哪个商品销量最高？帮我画出来。",
+        },
+    ))
+
+    app.run()
+
+    assert not app.exception
+    assert _vega_charts(app)
+
+
+def test_clarification_message_renders_without_analysis_blocks(rich_csv):
+    app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+    project = create_database(app.session_state, "澄清测试", rich_csv)
+    project.chat_messages.extend((
+        {"role": "user", "content": "帮我比较一下这两个"},
+        {
+            "role": "assistant",
+            "kind": "clarification",
+            "content": "你想比较哪两个商品？\n\n1. 欧包和酸奶",
+        },
+    ))
+
+    app.run()
+
+    assert not app.exception
+    html = "\n".join(item.value for item in app.markdown)
+    assert "你想比较哪两个商品" in html
+    assert "assistant-answer" in html
+    assert '<div class="kpi-summary">' not in html
+    assert not _vega_charts(app)
 
 
 def test_streamlit_database_search_and_switch_are_isolated():

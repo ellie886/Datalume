@@ -23,6 +23,20 @@ class AgentModelTurn:
 
 
 @dataclass(frozen=True)
+class AgentRequestDecision:
+    """一次轻量规划同时决定是否澄清，以及继续时应加载哪个业务 Skill。"""
+
+    action: str
+    resolved_question: str
+    skill: str | None = None
+    clarification_question: str | None = None
+    options: tuple[str, ...] = ()
+    reason: str | None = None
+    ambiguity_type: str = "other"
+    uses_pending: bool = False
+
+
+@dataclass(frozen=True)
 class VisualizationSpec:
     analysis_type: str
     metric: str | None = None
@@ -101,6 +115,8 @@ class AgentResponse:
     analysis_results: tuple[tuple[str, Any], ...] = ()
     report: Any | None = field(default=None, repr=False, compare=False)
     skills_used: tuple[str, ...] = ()
+    needs_clarification: bool = False
+    clarification_options: tuple[str, ...] = ()
 
     def public_trace(self) -> dict[str, Any]:
         return {

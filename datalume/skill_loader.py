@@ -122,8 +122,6 @@ def deterministic_skill_selection(
     """仅在 LLM Skill selection 不可用时启用的保守组合规则。"""
 
     names = {item.name for item in available}
-    if "business-diagnosis" not in names:
-        return None
     normalized = re.sub(r"\s+", "", question.lower())
     diagnostic_signals = (
         "为什么", "什么原因", "诊断", "哪里出了问题", "出了什么问题",
@@ -137,4 +135,18 @@ def deterministic_skill_selection(
     diagnostic = any(signal in normalized for signal in diagnostic_signals)
     changing = any(signal in normalized for signal in change_signals)
     simple_only = any(signal in normalized for signal in simple_query_signals) and not diagnostic
-    return "business-diagnosis" if diagnostic and changing and not simple_only else None
+    if "business-diagnosis" in names and diagnostic and changing and not simple_only:
+        return "business-diagnosis"
+    definition_request = any(signal in normalized for signal in (
+        "口径", "怎么算", "如何计算", "怎么定义", "按什么", "衡量",
+    ))
+    vague_ranking = (
+        any(signal in normalized for signal in ("最好", "最优", "表现好"))
+        and any(subject in normalized for subject in ("商品", "产品", "渠道", "用户"))
+    )
+    value_question = "高价值" in normalized or (
+        "销售额" in normalized and any(word in normalized for word in ("利润", "毛利"))
+    )
+    if "business-metrics" in names and (definition_request or vague_ranking or value_question):
+        return "business-metrics"
+    return None

@@ -107,11 +107,15 @@ def demo_bundle():
 def test_skill_loader_progressively_exposes_metadata_then_full_instructions():
     loader = SkillLoader(PROJECT_ROOT / "skills")
     metadata = loader.list_metadata()
-    assert metadata == (SkillMetadata(
+    by_name = {item.name: item for item in metadata}
+    assert set(by_name) == {
+        "business-diagnosis", "business-metrics", "clarify-analysis-request",
+    }
+    assert by_name["business-diagnosis"] == SkillMetadata(
         "business-diagnosis",
         "Diagnose changes or problems in business performance using available trend, order, product, channel and user data. Use when the user asks why business performance changed, what is driving a decline or anomaly, or where an operating problem may be coming from.",
-    ),)
-    assert "Objective" not in metadata[0].description
+    )
+    assert "Objective" not in by_name["business-diagnosis"].description
     loaded = loader.load("business-diagnosis")
     assert "## Objective" in loaded.instructions
     assert "Hypothesis Testing" in loaded.instructions

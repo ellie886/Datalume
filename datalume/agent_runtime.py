@@ -7,18 +7,25 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import time
 from typing import Any, Mapping, MutableMapping
 
 from dotenv import load_dotenv
 
-from .agent_models import AgentResponse, AgentState, AgentStep, AgentToolResult
+from .agent_models import (
+    AgentRequestDecision,
+    AgentResponse,
+    AgentState,
+    AgentStep,
+    AgentToolResult,
+)
 from .agent_tools import AgentToolContext, AgentToolRegistry
 from .ai_agent import analyze_question
 from .analysis_engine import AnalysisResult
 from .data_processor import BusinessMetrics, DataCapabilities, DataOverview
 from .deepseek_client import DeepSeekClient, DeepSeekError, IntentPlan, analysis_payload, capability_payload
-from .router import QuestionType
+from .router import QuestionType, has_explicit_intent
 from .skill_loader import (
     LoadedSkill,
     SkillLoader,
@@ -30,6 +37,27 @@ from .skill_loader import (
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MAX_AGENT_STEPS = 4
+CLARIFICATION_SKILL_NAME = "clarify-analysis-request"
+METRICS_SKILL_NAME = "business-metrics"
+MAX_CLARIFICATION_ATTEMPTS = 3
+CLARIFICATION_PROMPTS = {
+    "object": "你希望分析哪个对象？",
+    "metric": "你希望使用哪个指标判断？",
+    "time_range": "你希望分析哪个时间范围？",
+    "comparison": "你希望与哪个对象或时间段比较？",
+    "referent": "你提到的对象具体指什么？",
+    "scope": "你希望分析哪一部分数据？",
+    "other": "请补充一下你希望分析的对象或口径？",
+}
+_UNSAFE_CLARIFICATION_OPTION = re.compile(
+    r"[\n\r。；]|[%￥¥$]|\d[\d,.]*\s*(?:元|件|单|人|次|%)|"
+    r"(?:是|为|达到|下降|上涨|增长|减少|增加|贡献)"
+)
+_METRIC_CLARIFICATION_REPLY = re.compile(
+    r"(?:就?按|就?用|看)?"
+    r"(?:销售额|营收|销量|件数|利润额|利润|毛利率|毛利|订单量|用户数|客单价|复购率|频次)"
+    r"(?:(?:来)?(?:看|算|比较|判断|衡量)|就好|即可|吧)?"
+)
 
 
 class AgentRuntimeError(RuntimeError):
@@ -62,7 +90,7 @@ def _compact_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
         "previous_time_range", "previous_analysis_summary",
         "previous_visualization_type", "last_user_goal",
         "last_tools_used", "last_entities", "last_metrics", "last_summary",
-        "last_skills_used",
+        "last_skills_used", "pending_clarification",
     )
     compact: dict[str, Any] = {}
     for key in allowed:
@@ -135,7 +163,10 @@ def _resolve_skill(
     """metadata-first 选择；选择或加载失败时安全回到原 Agent v1。"""
 
     try:
-        metadata = loader.list_metadata()
+        metadata = tuple(
+            item for item in loader.list_metadata()
+            if item.name != CLARIFICATION_SKILL_NAME
+        )
     except SkillLoadError as error:
         LOGGER.warning("skill_metadata_unavailable reason=%s", type(error).__name__)
         return None
@@ -161,6 +192,212 @@ def _resolve_skill(
     except SkillLoadError as error:
         LOGGER.warning("skill_load_failed skill=%s reason=%s", selected, type(error).__name__)
         return None
+
+
+def _resolve_request(
+    question: str,
+    *,
+    llm_client: DeepSeekClient,
+    conversation_context: Mapping[str, Any] | None,
+    capabilities: DataCapabilities,
+    loader: SkillLoader,
+    available_fields: tuple[str, ...],
+    available_tools: tuple[Mapping[str, str], ...],
+) -> tuple[AgentRequestDecision, LoadedSkill | None]:
+    """优先执行智能澄清与 Skill 选择；旧 client 自动保持原选择流程。"""
+
+    planner = getattr(llm_client, "plan_request", None)
+    try:
+        metadata = loader.list_metadata()
+        clarification_skill = loader.load(CLARIFICATION_SKILL_NAME)
+        business_metadata = tuple(
+            item for item in metadata if item.name != CLARIFICATION_SKILL_NAME
+        )
+        metrics_instructions = ""
+        if any(item.name == METRICS_SKILL_NAME for item in business_metadata):
+            try:
+                metrics_instructions = loader.load(METRICS_SKILL_NAME).instructions
+            except SkillLoadError:
+                LOGGER.warning("metrics_policy_unavailable")
+        if not callable(planner):
+            raise AttributeError("request planner unavailable")
+        decision = planner(
+            question,
+            skills=[item.as_prompt_payload() for item in business_metadata],
+            clarification_instructions=clarification_skill.instructions,
+            conversation_context=conversation_context,
+            capabilities=capabilities,
+            available_fields=available_fields,
+            available_tools=available_tools,
+            metrics_instructions=metrics_instructions,
+        )
+        if not isinstance(decision, AgentRequestDecision):
+            raise TypeError("invalid request decision")
+        if decision.action not in {"continue", "clarify"}:
+            raise ValueError("invalid request action")
+        if decision.action == "clarify":
+            return decision, None
+        active_skill = loader.load(decision.skill) if decision.skill else None
+        return decision, active_skill
+    except (DeepSeekError, SkillLoadError, AttributeError, TypeError, ValueError, RuntimeError) as error:
+        LOGGER.info("request_planning_fallback reason=%s", type(error).__name__)
+        pending = (
+            conversation_context.get("pending_clarification")
+            if conversation_context else None
+        )
+        metric_reply = _METRIC_CLARIFICATION_REPLY.fullmatch(
+            re.sub(r"[\s。！？?!]", "", question)
+        )
+        use_pending = isinstance(pending, Mapping) and (
+            not has_explicit_intent(question) or metric_reply is not None
+        )
+        fallback_decision = AgentRequestDecision(
+            action="continue",
+            resolved_question=question,
+            uses_pending=use_pending,
+        )
+        skill_question = _resolved_question(
+            question, fallback_decision, conversation_context
+        )
+        active_skill = _resolve_skill(
+            skill_question,
+            llm_client=llm_client,
+            conversation_context=conversation_context,
+            capabilities=capabilities,
+            loader=loader,
+        )
+        return AgentRequestDecision(
+            action="continue",
+            resolved_question=question,
+            skill=active_skill.metadata.name if active_skill else None,
+            uses_pending=use_pending,
+        ), active_skill
+
+
+def _safe_clarification_options(options: tuple[str, ...]) -> tuple[str, ...]:
+    """只允许短口径选项，避免模型绕过数据工具输出业务结论。"""
+
+    safe: list[str] = []
+    for item in options:
+        option = str(item).strip()
+        if not option or len(option) > 40 or _UNSAFE_CLARIFICATION_OPTION.search(option):
+            continue
+        safe.append(option)
+    return tuple(dict.fromkeys(safe))[:3]
+
+
+def _pending_details(context: Mapping[str, Any] | None) -> tuple[str | None, list[str], int]:
+    pending = context.get("pending_clarification") if context else None
+    if not isinstance(pending, Mapping):
+        return None, [], 0
+    original = str(pending.get("original_question") or "").strip() or None
+    raw_supplements = pending.get("supplements") or []
+    if not isinstance(raw_supplements, (list, tuple)):
+        raw_supplements = []
+    supplements = [
+        str(item).strip() for item in raw_supplements
+        if str(item).strip()
+    ][:MAX_CLARIFICATION_ATTEMPTS]
+    try:
+        attempts = max(0, int(pending.get("attempts") or 0))
+    except (TypeError, ValueError):
+        attempts = 0
+    return original, list(dict.fromkeys(supplements)), attempts
+
+
+def _resolved_question(
+    question: str,
+    decision: AgentRequestDecision,
+    conversation_context: Mapping[str, Any] | None,
+) -> str:
+    """只拼接用户原话；绝不采用模型改写后的分析目标。"""
+
+    original, supplements, _ = _pending_details(conversation_context)
+    if not original or not decision.uses_pending:
+        return question
+    additions = list(supplements)
+    if question != original and question not in additions:
+        additions.append(question)
+    if not additions:
+        return original
+    return original + "\n用户补充：" + "；".join(additions[:MAX_CLARIFICATION_ATTEMPTS])
+
+
+def _clarification_response(
+    question: str,
+    decision: AgentRequestDecision,
+    conversation_context: MutableMapping[str, Any] | None,
+) -> AgentResponse:
+    prompt = CLARIFICATION_PROMPTS.get(
+        decision.ambiguity_type, CLARIFICATION_PROMPTS["other"]
+    )
+    options = _safe_clarification_options(decision.options)
+    clarification = prompt
+    if options:
+        clarification += "\n\n" + "\n".join(
+            f"{index}. {option}" for index, option in enumerate(options, 1)
+        )
+    if conversation_context is not None:
+        original_question, supplements, previous_attempts = _pending_details(
+            conversation_context
+        )
+        if original_question is None:
+            original_question = question
+        elif question != original_question and question not in supplements:
+            supplements.append(question)
+        attempts = min(previous_attempts + 1, MAX_CLARIFICATION_ATTEMPTS)
+        if previous_attempts >= MAX_CLARIFICATION_ATTEMPTS:
+            clarification = (
+                "当前信息仍不足，暂时无法安全执行分析。"
+                "请重新完整描述要分析的对象、指标和时间范围。"
+            )
+            conversation_context.pop("pending_clarification", None)
+            options = ()
+        else:
+            conversation_context["pending_clarification"] = {
+                "original_question": original_question,
+                "supplements": supplements[:MAX_CLARIFICATION_ATTEMPTS],
+                "clarification_question": prompt,
+                "options": list(options),
+                "reason": decision.reason,
+                "attempts": attempts,
+            }
+    return AgentResponse(
+        answer=clarification,
+        steps=(),
+        visualizations=(),
+        fallback_used=False,
+        fallback_level="agent",
+        stop_reason=(
+            "clarification_limit"
+            if conversation_context is not None
+            and "pending_clarification" not in conversation_context
+            and clarification.startswith("当前信息仍不足")
+            else "needs_clarification"
+        ),
+        primary_result=None,
+        plan=None,
+        analysis_results=(),
+        skills_used=(CLARIFICATION_SKILL_NAME,),
+        needs_clarification=True,
+        clarification_options=options,
+    )
+
+
+def _tool_summaries(registry: AgentToolRegistry) -> tuple[Mapping[str, str], ...]:
+    """给请求规划器提供最小白名单能力摘要，不暴露执行实现。"""
+
+    summaries: list[Mapping[str, str]] = []
+    for schema in registry.schemas():
+        function = schema.get("function", {})
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        summaries.append({
+            "name": name,
+            "description": str(function.get("description") or "").strip(),
+        })
+    return tuple(summaries)
 
 
 def _tool_message(result: AgentToolResult) -> dict[str, Any]:
@@ -232,6 +469,7 @@ def _update_context(
 ) -> None:
     if context is None:
         return
+    context.pop("pending_clarification", None)
     result = response.primary_result
     entities = []
     for _, analysis in response.analysis_results:
@@ -272,15 +510,9 @@ def _run_tool_loop(
     conversation_context: MutableMapping[str, Any] | None,
     config: AgentConfig,
     registry: AgentToolRegistry,
-    skill_loader: SkillLoader,
+    active_skill: LoadedSkill | None,
 ) -> AgentResponse:
-    active_skill = _resolve_skill(
-        question,
-        llm_client=llm_client,
-        conversation_context=conversation_context,
-        capabilities=capabilities,
-        loader=skill_loader,
-    )
+    available_fields = tuple(str(column) for column in getattr(orders, "columns", ()))
     state = AgentState(question, database_id, _compact_context(conversation_context))
     if active_skill is not None:
         state.skills_used.append(active_skill.metadata.name)
@@ -293,7 +525,7 @@ def _run_tool_loop(
         conversation_context,
         capabilities,
         active_skill=active_skill,
-        available_fields=tuple(str(column) for column in getattr(orders, "columns", ())),
+        available_fields=available_fields,
     )
     started_total = time.monotonic()
 
@@ -432,20 +664,47 @@ def run_agent(
             llm_client=None, conversation_context=conversation_context,
             agent_failed=True,
         )
+    runtime_registry = registry or AgentToolRegistry()
+    loader = skill_loader or SkillLoader()
+    available_fields = tuple(str(column) for column in getattr(orders, "columns", ()))
+    resolved_question = cleaned
     try:
+        request_decision, active_skill = _resolve_request(
+            cleaned,
+            llm_client=llm_client,
+            conversation_context=conversation_context,
+            capabilities=capabilities,
+            loader=loader,
+            available_fields=available_fields,
+            available_tools=_tool_summaries(runtime_registry),
+        )
+        if request_decision.action == "clarify":
+            return _clarification_response(
+                cleaned, request_decision, conversation_context
+            )
+        resolved_question = _resolved_question(
+            cleaned, request_decision, conversation_context
+        )
+        if (
+            conversation_context is not None
+            and not request_decision.uses_pending
+        ):
+            conversation_context.pop("pending_clarification", None)
         return _run_tool_loop(
-            cleaned, database_id=database_id, orders=orders, metrics=metrics,
+            resolved_question, database_id=database_id, orders=orders, metrics=metrics,
             capabilities=capabilities, overview=overview, llm_client=llm_client,
             conversation_context=conversation_context, config=runtime_config,
-            registry=registry or AgentToolRegistry(),
-            skill_loader=skill_loader or SkillLoader(),
+            registry=runtime_registry,
+            active_skill=active_skill,
         )
     except (AgentRuntimeError, DeepSeekError, AttributeError, TypeError, ValueError) as error:
         LOGGER.warning(
             "agent_fallback database_id=%s reason=%s", database_id, type(error).__name__
         )
+        if conversation_context is not None:
+            conversation_context.pop("pending_clarification", None)
         return _legacy_response(
-            cleaned, orders=orders, metrics=metrics, capabilities=capabilities,
+            resolved_question, orders=orders, metrics=metrics, capabilities=capabilities,
             llm_client=llm_client, conversation_context=conversation_context,
             agent_failed=True,
         )
