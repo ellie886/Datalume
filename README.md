@@ -1,20 +1,20 @@
-# Prism（棱镜）
+# Datalume
 
 **上传订单数据，用自然语言完成经营分析。**
 
-<img src="assets/readme-preview/prism-banner.webp" alt="Prism — AI Business Data Analysis" width="100%">
+<img src="assets/readme-preview/banner.webp" alt="Datalume — AI Business Data Analysis" width="100%">
 
-Prism（棱镜）是一个面向订单与零售经营场景的 AI 数据分析 Agent 原型。你可以上传符合字段要求的 CSV / Excel，询问销售变化、商品表现、渠道贡献或复购情况，查看分析结果、图表和 Markdown 经营报告。
+Datalume 是一个面向订单与零售经营场景的 AI 数据分析 Agent 原型。你可以上传符合字段要求的 CSV / Excel，询问销售变化、商品表现、渠道贡献或复购情况，查看分析结果、图表和 Markdown 经营报告。
 
-项目从一个常见问题出发：看见销售额下降以后，怎样继续拆解，而不止得到一张报表？Prism 将分析方法封装为 Skill，由模型选择分析工具，再交给 Python / Pandas 计算。它适合用来体验经营数据对话，也适合学习 Agent、Skill 与 Tool 如何协作。
+项目从一个常见问题出发：看见销售额下降以后，怎样继续拆解，而不止得到一张报表？Datalume 将分析方法封装为 Skill，由模型选择分析工具，再交给 Python / Pandas 计算。它适合用来体验经营数据对话，也适合学习 Agent、Skill 与 Tool 如何协作。
 
 ## 快速开始
 
 建议使用 Python 3.12。macOS / Linux：
 
 ```bash
-git clone https://github.com/ellie886/prism.git
-cd prism
+git clone https://github.com/ellie886/Datalume.git
+cd Datalume
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -45,9 +45,9 @@ cp .env.example .env
 | 哪个商品销量最高？帮我画出来。 | 计算商品排名，并按明确画图请求生成可视化。 |
 | 渠道表现和复购情况怎么样？ | 在字段支持时，比较渠道销售表现与用户购买情况。 |
 
-下面是项目原名 Datalume 时的真实运行界面展示；当前应用内仍沿用旧名称，其中数字仅属于演示数据。
+下面是现有演示数据的产品界面展示，包含真实运行截图；其中数字仅属于演示数据。
 
-<img src="assets/readme-preview/features.webp" alt="原 Datalume 版本的演示订单分析：对话、核心指标和销售趋势图" width="100%">
+<img src="assets/readme-preview/features.webp" alt="Datalume 演示订单分析：对话、核心指标和销售趋势图" width="100%">
 
 当前覆盖商品、用户、复购、利润、渠道、趋势、策略七类分析。分析过程可以展开查看，已有结果可以生成 Markdown 报告；多个数据工作区分别保存各自的对话、数据和报告。
 
@@ -105,6 +105,6 @@ python -m pytest -q
 
 ## 项目与许可
 
-作者：[ellie886](https://github.com/ellie886) · 仓库：[prism](https://github.com/ellie886/prism)
+作者：[ellie886](https://github.com/ellie886) · 仓库：[Datalume](https://github.com/ellie886/Datalume)
 
 当前仓库尚未提供 `LICENSE` 文件，本文不新增许可证声明。
