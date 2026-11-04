@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from html import escape
+from hashlib import sha256
+from io import BytesIO
+import json
 from pathlib import Path
 from typing import Any, MutableMapping
 
@@ -23,6 +26,9 @@ from datalume.data_processor import (
     process_order_csv,
     summarize_orders,
 )
+from datalume.data_preparation import FIELD_ALIASES, inspect_quality, prepare_table, read_table, suggest_mappings
+from datalume.partial_analysis import render_partial_analysis
+from datalume.import_recommendation import ImportRecommendationError, make_preview_payload, recommend_import
 from datalume.database_manager import (
     DatabaseProject,
     create_database,
@@ -52,8 +58,8 @@ from datalume.visualization import PALETTE, style_chart
 
 
 @st.cache_data(show_spinner=False)
-def load_dataset(content: bytes):
-    orders, quality = process_order_csv(content)
+def load_dataset(content: bytes, remove_duplicates: bool = True):
+    orders, quality = process_order_csv(content, remove_duplicates=remove_duplicates)
     return (
         orders,
         quality,
@@ -117,25 +123,177 @@ def _render_database_item(project: DatabaseProject, active_id: str) -> None:
             st.rerun()
 
 
-def _prepare_uploaded_orders(uploaded, *, key_prefix: str) -> bytes | None:
-    """Render only the sheet selector; validation lives in data_processor."""
-
+def _prepare_uploaded_orders(uploaded, *, key_prefix: str):
+    """Inspect locally, optionally request an AI suggestion, and confirm import."""
     if uploaded is None:
+        st.session_state.pop(f"{key_prefix}_recommendation", None)
+        st.session_state.pop(f"{key_prefix}_recommendation_scope", None)
+        st.session_state.pop(f"{key_prefix}_pending_recommendation", None)
         return None
-    content = uploaded.getvalue()
-    filename = uploaded.name
-    sheet_name = None
+    content, filename = uploaded.getvalue(), uploaded.name
+    file_key = fingerprint_csv(content)
     try:
+        sheet_name = None
         if Path(filename).suffix.lower() in {".xlsx", ".xls"}:
             sheets = excel_sheet_names(content, filename=filename)
-            if len(sheets) > 1:
-                sheet_name = st.selectbox(
-                    "选择工作表", sheets,
-                    key=f"{key_prefix}_sheet_{fingerprint_csv(content)}",
+            sheet_name = (st.selectbox("选择工作表", sheets, key=f"{key_prefix}_sheet_{file_key}")
+                          if len(sheets) > 1 else sheets[0])
+        selection_key = sha256(f"{file_key}:{sheet_name}".encode()).hexdigest()
+        header_key = f"{key_prefix}_header_{selection_key}"
+        pending = st.session_state.pop(f"{key_prefix}_pending_recommendation", None)
+        if pending is not None and pending["selection_key"] == selection_key:
+            # Apply before the header and mapping widgets are instantiated.
+            st.session_state[header_key] = pending["header_row"] + 1
+            target_key = sha256(f"{selection_key}:{pending['header_row']}".encode()).hexdigest()
+            st.session_state[f"{key_prefix}_mapping_seed_{target_key}"] = pending["mapping"]
+            version_key = f"{key_prefix}_mapping_version_{target_key}"
+            st.session_state[version_key] = st.session_state.get(version_key, 0) + 1
+        with st.expander("预览表格与调整表头", expanded=False):
+            header_row = int(st.number_input(
+                "表头位于第几行", min_value=1, value=1, step=1, key=header_key,
+                help="如果第一行是标题，请选择真正包含字段名称的行。",
+            )) - 1
+            table = read_table(content, filename=filename, sheet_name=sheet_name, header_row=header_row)
+            if table.frame.empty:
+                st.error("表头下面没有数据。")
+                return None
+            st.caption(f"识别到 {len(table.columns)} 列、{len(table.frame)} 行；请核对原始内容。")
+            preview = table.frame.head(8).copy()
+            preview.columns = [f"{name}（第{i + 1}列）" for i, name in enumerate(table.columns)]
+            st.dataframe(preview, hide_index=True, use_container_width=True)
+        mapping_key = sha256(f"{selection_key}:{header_row}".encode()).hexdigest()
+        scope_key = f"{key_prefix}_recommendation_scope"
+        previous_scope = st.session_state.get(scope_key)
+        if previous_scope != mapping_key:
+            st.session_state.pop(f"{key_prefix}_recommendation", None)
+            if previous_scope:
+                st.session_state.pop(f"{key_prefix}_mapping_seed_{previous_scope}", None)
+                st.session_state.pop(f"{key_prefix}_mapping_version_{previous_scope}", None)
+                st.session_state.pop(f"{key_prefix}_ai_consent_{previous_scope}", None)
+                for state_key in list(st.session_state):
+                    if state_key.startswith(f"{key_prefix}_confirm_{previous_scope}_"):
+                        del st.session_state[state_key]
+            st.session_state[scope_key] = mapping_key
+        labels = {
+            "date": "日期", "revenue": "销售额", "channel": "渠道", "user_id": "用户编号",
+            "product": "商品", "price": "单价", "quantity": "数量", "gender": "性别",
+            "grade": "年级", "order_id": "订单编号", "unit_cost": "单位成本",
+            "total_cost": "总成本", "profit": "利润", "acquisition_cost": "获客成本",
+        }
+        st.markdown("**推荐导入方案**")
+        st.caption("已根据表头生成本地建议。可以修改字段；金额单位和业务口径仍需你核对。")
+        with st.expander("让 AI 帮我理解表格", expanded=False):
+            st.caption(
+                "经你同意并点击后，会向已配置的模型服务（默认为 DeepSeek）发送所选工作表名称、"
+                "前 15 行及前 12 列的单元格内容（每格最多 80 字），以及表格行列数。"
+                "样本可能包含个人信息、商业或薪酬数据，请先确认适合发送。"
+            )
+            raw_table = read_table(content, filename=filename, sheet_name=sheet_name, header_row=0)
+            if st.checkbox("查看将发送的表格样本", key=f"{key_prefix}_show_sample_{mapping_key}"):
+                payload = make_preview_payload(raw_table)
+                st.caption(f"工作表：{payload['sheet_name'] or 'CSV'}；展示行数 {payload['sample_row_count']}，列数 {payload['sample_column_count']}。")
+                st.dataframe(pd.DataFrame([item["cells"] for item in payload["sample_rows"]]),
+                             hide_index=True, use_container_width=True)
+            consent = st.checkbox("同意发送表格样本给 AI", key=f"{key_prefix}_ai_consent_{mapping_key}")
+            if st.button("生成 AI 推荐方案", disabled=not consent, key=f"{key_prefix}_request_ai_{mapping_key}"):
+                if consent:
+                    try:
+                        with st.spinner("AI 正在理解表格结构…"):
+                            result = recommend_import(raw_table, load_llm_client())
+                        st.session_state[f"{key_prefix}_recommendation"] = result
+                    except (ImportRecommendationError, DataValidationError):
+                        st.session_state.pop(f"{key_prefix}_recommendation", None)
+                        st.warning("AI 推荐暂不可用，可继续使用本地建议和手动修改。")
+            recommendation = st.session_state.get(f"{key_prefix}_recommendation")
+            if recommendation is not None:
+                st.caption("AI 建议仅供核对，不会自动改动数据或字段。")
+                if recommendation.structure:
+                    st.text(f"表格类型：{recommendation.structure}")
+                if recommendation.description:
+                    st.text(recommendation.description)
+                if recommendation.header_row is not None:
+                    st.caption(f"建议表头：第 {recommendation.header_row + 1} 行。")
+                    proposed_table = read_table(content, filename=filename, sheet_name=sheet_name,
+                                                header_row=recommendation.header_row)
+                    if recommendation.mapping:
+                        st.text("建议字段：" + "；".join(
+                            f"{labels[field]} ← {proposed_table.columns[index]}（第 {index + 1} 列）"
+                            for field, index in recommendation.mapping.items()
+                        ))
+                    if st.button("应用 AI 推荐", key=f"{key_prefix}_apply_ai_{mapping_key}"):
+                        st.session_state[f"{key_prefix}_pending_recommendation"] = {
+                            "selection_key": selection_key,
+                            "header_row": recommendation.header_row,
+                            "mapping": dict(recommendation.mapping),
+                        }
+                        st.rerun()
+                for concern in recommendation.concerns:
+                    st.text("待核对：" + concern)
+        summary = st.container()
+        suggestions = st.session_state.get(f"{key_prefix}_mapping_seed_{mapping_key}", suggest_mappings(table))
+        version = st.session_state.get(f"{key_prefix}_mapping_version_{mapping_key}", 0)
+        mapping = {}
+        options = [-1, *range(len(table.columns))]
+        with st.expander("修改方案", expanded=False):
+            st.caption("可手动调整字段对应关系；不确定的字段保持未选择。")
+            for field in ("date", "revenue", "channel", "user_id", "product", "price", "quantity",
+                          "gender", "grade", "order_id", "unit_cost", "total_cost", "profit", "acquisition_cost"):
+                suggested = suggestions.get(field, -1)
+                if suggested not in options:
+                    suggested = -1
+                chosen = st.selectbox(
+                    labels[field], options, index=options.index(suggested),
+                    format_func=lambda i: "未选择" if i == -1 else f"{table.columns[i]}（第{i + 1}列）",
+                    key=f"{key_prefix}_map_{mapping_key}_{version}_{field}",
                 )
+                if chosen != -1:
+                    mapping[field] = chosen
+            remove_duplicates = st.checkbox(
+                "删除完全重复的行", value=False, key=f"{key_prefix}_dedupe_{mapping_key}",
+                help="重复行可能是真实交易；默认保留。",
+            )
+        with summary:
+            st.caption(f"表头：第 {header_row + 1} 行；检测到 {len(table.columns)} 列、{len(table.frame)} 行。")
+            if mapping:
+                st.text("字段建议：" + "；".join(
+                    f"{labels[field]} ← {table.columns[index]}（第 {index + 1} 列）"
+                    for field, index in mapping.items()
+                ))
             else:
-                sheet_name = sheets[0]
-        return prepare_order_upload(content, filename=filename, sheet_name=sheet_name)
+                st.info("未能确定匹配字段。可以展开“修改方案”选择，或让 AI 给出建议。")
+            try:
+                quality = inspect_quality(table, mapping)
+            except DataValidationError as error:
+                st.error(str(error))
+                return None
+            st.caption(f"完全空白行：{len(quality.empty_rows)}；完全重复行：{len(quality.duplicate_rows)}。"
+                       + ("将删除重复行。" if remove_duplicates else "重复行默认保留。"))
+            if quality.duplicate_rows:
+                st.caption("疑似重复行：" + "、".join(map(str, quality.duplicate_rows[:20])))
+            for field, rows in quality.invalid_numeric.items():
+                if rows:
+                    st.warning(f"{labels[field]}有 {len(rows)} 行为空或不是可识别的数字（如第 {rows[0]} 行）；请检查原表或映射。")
+            if quality.invalid_dates or quality.ambiguous_dates:
+                st.warning(f"日期有 {len(quality.invalid_dates)} 行无效、{len(quality.ambiguous_dates)} 行格式有歧义，请核对。")
+            try:
+                prepared = prepare_table(table, mapping, remove_duplicates=remove_duplicates)
+                if prepared.profile == "orders":
+                    process_order_csv(prepared.csv_content, remove_duplicates=False)
+                    st.caption("当前方案可使用完整订单分析。")
+                else:
+                    st.caption("当前方案可使用基础销售额趋势" + ("和渠道汇总。" if "channel" in mapping else "。"))
+                    st.caption("请核对金额单位、退款和统计范围；无法确认的口径请先返回原表核实。")
+            except DataValidationError as error:
+                st.info("当前方案暂不能导入：" + str(error))
+                st.caption("当前仅支持完整订单数据，或含日期和销售额的数据。其他结构仍需整理或扩展分析能力。")
+                return None
+        signature = sha256(json.dumps([mapping, remove_duplicates, header_row, version], sort_keys=True).encode()).hexdigest()
+        if not st.checkbox(
+            "我已核对字段、清洗方式和金额口径", key=f"{key_prefix}_confirm_{mapping_key}_{signature}",
+        ):
+            st.info("请核对方案并勾选确认后继续。")
+            return None
+        return prepared
     except DataValidationError as error:
         st.error(str(error))
         return None
@@ -149,7 +307,7 @@ def _create_database_dialog() -> None:
         key="create_database_name",
     )
     uploaded = st.file_uploader(
-        "上传订单 CSV 或 Excel",
+        "上传 CSV 或 Excel",
         type=["csv", "xlsx", "xls"],
         key="create_database_csv",
     )
@@ -167,7 +325,9 @@ def _create_database_dialog() -> None:
             return
         if content is None:
             return
-        create_database(st.session_state, cleaned_name, content)
+        create_database(st.session_state, cleaned_name, content.csv_content,
+                        profile="orders" if content.profile == "orders" else "partial",
+                        remove_duplicates=False)
         _set_flash(f"已创建数据库“{cleaned_name}”。")
         st.session_state["show_create_database"] = False
         del st.session_state["create_database_name"]
@@ -330,7 +490,9 @@ def _render_data_management(project: DatabaseProject, overview, quality, capabil
                 key=f"confirm_replace_{project.database_id}",
                 use_container_width=True,
             ):
-                if replace_database_data(project, content):
+                if replace_database_data(project, content.csv_content,
+                                         profile="orders" if content.profile == "orders" else "partial",
+                                         remove_duplicates=False):
                     _set_flash("数据源已更新，旧对话与报告已清空。")
                     st.rerun()
                 else:
@@ -513,6 +675,37 @@ def _quick_questions(orders, capabilities) -> tuple[str, ...]:
     return tuple(questions)
 
 
+def _render_partial_workspace(project: DatabaseProject) -> None:
+    """Limited aggregates for tables that cannot safely use the order agent."""
+    title_col, menu_col = st.columns([12, 2], vertical_alignment="center")
+    with title_col:
+        render_workspace_header(project.name)
+    with menu_col:
+        with st.popover("更多", icon=":material/more_horiz:", use_container_width=True):
+            if st.button("重命名", key=f"rename_{project.database_id}"):
+                st.session_state["show_rename_database_id"] = project.database_id
+            if st.button("删除数据库", key=f"delete_{project.database_id}"):
+                st.session_state["show_delete_database_id"] = project.database_id
+            replacement = st.file_uploader("替换当前数据库 CSV 或 Excel", type=["csv", "xlsx", "xls"], key=f"replace_{project.database_id}")
+            if replacement is not None:
+                st.warning("替换数据后，当前数据库的聊天记录和报告将被清空。")
+                prepared = _prepare_uploaded_orders(replacement, key_prefix=f"replace_order_{project.database_id}")
+                if prepared is not None and st.button("确认替换数据", key=f"confirm_replace_{project.database_id}"):
+                    if replace_database_data(project, prepared.csv_content,
+                                             profile="orders" if prepared.profile == "orders" else "partial",
+                                             remove_duplicates=False):
+                        _set_flash("数据源已更新。")
+                        st.rerun()
+                    else:
+                        st.info("上传数据与当前数据源相同。")
+    if st.session_state.get("show_rename_database_id") == project.database_id:
+        _rename_database_dialog(project)
+    if st.session_state.get("show_delete_database_id") == project.database_id:
+        _delete_database_dialog(project)
+    frame = pd.read_csv(BytesIO(project.csv_content), dtype="string", keep_default_na=False)
+    render_partial_analysis(frame)
+
+
 def main() -> None:
     st.set_page_config(page_title="Datalume", page_icon="◈", layout="wide", initial_sidebar_state="expanded")
     inject_global_styles()
@@ -528,8 +721,14 @@ def main() -> None:
     if project is None:
         return
 
+    if getattr(project, "profile", "orders") == "partial":
+        _render_partial_workspace(project)
+        return
+
     try:
-        orders, quality, overview, metrics, capabilities = load_dataset(project.csv_content)
+        orders, quality, overview, metrics, capabilities = load_dataset(
+            project.csv_content, getattr(project, "remove_duplicates", True)
+        )
     except DataValidationError as error:
         st.error(str(error))
         st.stop()

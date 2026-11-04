@@ -196,7 +196,9 @@ def _rows(mask: pd.Series) -> str:
     return "、".join(str(int(index) + 2) for index in mask.index[mask])
 
 
-def process_order_csv(source: str | Path | bytes | BinaryIO) -> tuple[pd.DataFrame, DataQualityReport]:
+def process_order_csv(
+    source: str | Path | bytes | BinaryIO, *, remove_duplicates: bool = True
+) -> tuple[pd.DataFrame, DataQualityReport]:
     orders = _read_csv(source)
     orders.columns = [str(column).strip() for column in orders.columns]
     missing = tuple(column for column in REQUIRED_COLUMNS if column not in orders.columns)
@@ -209,9 +211,11 @@ def process_order_csv(source: str | Path | bytes | BinaryIO) -> tuple[pd.DataFra
     empty_mask = (required.isna() | required.apply(lambda column: column.str.strip().eq(""))).all(axis=1)
     empty_removed = int(empty_mask.sum())
     orders = orders.loc[~empty_mask].copy()
-    duplicate_mask = orders.duplicated(keep="first")
-    duplicates_removed = int(duplicate_mask.sum())
-    orders = orders.loc[~duplicate_mask].copy()
+    duplicates_removed = 0
+    if remove_duplicates:
+        duplicate_mask = orders.duplicated(keep="first")
+        duplicates_removed = int(duplicate_mask.sum())
+        orders = orders.loc[~duplicate_mask].copy()
     if orders.empty:
         raise DataValidationError("清理空行和重复行后没有可分析的数据。")
     blank_masks = {column: orders[column].isna() | orders[column].astype("string").str.strip().eq("") for column in REQUIRED_COLUMNS}

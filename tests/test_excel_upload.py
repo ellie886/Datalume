@@ -348,13 +348,17 @@ def test_app_creates_excel_database_from_selected_sheet(monkeypatch):
     next(field for field in app.text_input if field.label == "数据库名称").input("Excel 导入")
     next(field for field in app.selectbox if field.label == "选择工作表").select("实际订单")
     app.run()
+    # A recognized sheet alone must not create a database before confirmation.
+    _button(app, "创建数据库").click().run()
+    assert len(app.session_state["databases"]) == 0
+    next(field for field in app.checkbox if field.label == "我已核对字段、清洗方式和金额口径").check().run()
     _button(app, "创建数据库").click().run()
     assert not app.exception
     assert len(app.session_state["databases"]) == 1
     current = app.session_state["databases"][app.session_state["active_database_id"]]
     assert current.name == "Excel 导入"
     assert calculate_metrics(process_order_csv(current.csv_content)[0]).total_sales == 62
-    assert any(label == "上传订单 CSV 或 Excel" and set(types) == {"csv", "xlsx", "xls"}
+    assert any(label == "上传 CSV 或 Excel" and set(types) == {"csv", "xlsx", "xls"}
                for label, types in uploader_calls)
     assert len(app.chat_input) == 1
 
@@ -371,6 +375,9 @@ def test_app_confirms_excel_replacement_from_selected_sheet(monkeypatch):
     app.run()
     next(field for field in app.selectbox if field.label == "选择工作表").select("更新").run()
     assert current.chat_messages[0]["content"] == "旧内容"
+    assert not any(button.label == "确认替换数据" for button in app.button)
+    assert calculate_metrics(process_order_csv(current.csv_content)[0]).total_sales == 62
+    next(field for field in app.checkbox if field.label == "我已核对字段、清洗方式和金额口径").check().run()
     _button(app, "确认替换数据").click().run()
     assert not app.exception
     assert current.database_id == database_id and current.pinned

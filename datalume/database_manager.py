@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from hashlib import sha256
+import json
 from typing import Any, MutableMapping
 from uuid import uuid4
 
@@ -21,6 +23,19 @@ class DatabaseProject:
     agent_history: list[dict[str, Any]] = field(default_factory=list)
     diagnostic_report: Any | None = None
     diagnostic_report_source_id: str | None = None
+    profile: str = "orders"
+    remove_duplicates: bool = True
+
+
+def _dataset_fingerprint(csv_content: bytes, profile: str, remove_duplicates: bool) -> str:
+    """Include import interpretation in the data identity.
+
+    Retain the old raw-CSV hash for existing order projects for compatibility.
+    """
+    if profile == "orders" and remove_duplicates:
+        return fingerprint_csv(csv_content)
+    settings = json.dumps([profile, remove_duplicates], ensure_ascii=True).encode("utf-8")
+    return sha256(b"datalume-data-v1\0" + settings + b"\0" + csv_content).hexdigest()
 
 
 def initialize_database_state(state: MutableMapping[str, Any]) -> None:
@@ -38,6 +53,8 @@ def create_database(
     csv_content: bytes,
     *,
     pinned: bool = False,
+    profile: str = "orders",
+    remove_duplicates: bool = True,
 ) -> DatabaseProject:
     cleaned_name = name.strip()
     if not cleaned_name:
@@ -47,8 +64,10 @@ def create_database(
         database_id=database_id,
         name=cleaned_name,
         csv_content=csv_content,
-        data_source_id=fingerprint_csv(csv_content),
+        data_source_id=_dataset_fingerprint(csv_content, profile, remove_duplicates),
         pinned=pinned,
+        profile=profile,
+        remove_duplicates=remove_duplicates,
     )
     state["databases"][database_id] = project
     state["active_database_id"] = database_id
@@ -134,14 +153,27 @@ def search_databases(
     return sorted(projects, key=lambda project: (not project.pinned, project.name))
 
 
-def replace_database_data(project: DatabaseProject, csv_content: bytes) -> bool:
+def replace_database_data(
+    project: DatabaseProject,
+    csv_content: bytes,
+    *,
+    profile: str | None = None,
+    remove_duplicates: bool | None = None,
+) -> bool:
     """替换当前项目数据时清空只属于旧数据的对话和报告。"""
 
-    new_source_id = fingerprint_csv(csv_content)
+    new_profile = profile if profile is not None else getattr(project, "profile", "orders")
+    new_remove_duplicates = (
+        remove_duplicates if remove_duplicates is not None
+        else getattr(project, "remove_duplicates", True)
+    )
+    new_source_id = _dataset_fingerprint(csv_content, new_profile, new_remove_duplicates)
     if new_source_id == project.data_source_id:
         return False
     project.csv_content = csv_content
     project.data_source_id = new_source_id
+    project.profile = new_profile
+    project.remove_duplicates = new_remove_duplicates
     project.chat_messages.clear()
     project.conversation_context.clear()
     project.agent_history.clear()
